@@ -84,18 +84,40 @@ class ClusterwiseOracle:
         self.name = "Cluster-wise Oracle"
         self.setting = setting
 
-    def _discretize_features(self, X):
-        """Create clusters based on distinct X values,
-        points with identical X values are grouped together"""
-        cluster_ids = []
-        for i in range(X.shape[0]):
-            cluster_ids.append(tuple(X[i]))
-        return cluster_ids
+    def _get_ground_truth_clusters(self, X):
+        """Create clusters based on ground truth from data generation process
+        
+        The oracle knows the true clustering structure from how the data was generated:
+        - Setting 1: Continuous variance (no discrete clusters - should not use this method)
+        - Setting 2: Two clusters based on X[:, 0] <= 5 vs X[:, 0] > 5
+        - Setting 3: Three clusters based on X[:, 0] <= 3, (3,6], X[:, 0] > 6
+        """
+        x_first_feature = X[:, 0]  # The first feature determines the clustering
+        
+        if self.setting == 1:
+            # Setting 1 has continuous variance change, not discrete clusters
+            # Fall back to creating many fine-grained clusters based on first feature
+            # Discretize into bins for approximation
+            bins = np.linspace(0, 8, 21)  # 20 bins across [0,8] range
+            cluster_ids = np.digitize(x_first_feature, bins)
+        elif self.setting == 2:
+            # Setting 2: Two clusters - X[:, 0] <= 5 vs X[:, 0] > 5
+            cluster_ids = (x_first_feature > 5).astype(int)
+        elif self.setting == 3:
+            # Setting 3: Three clusters - X[:, 0] <= 3, (3,6], X[:, 0] > 6
+            cluster_ids = np.zeros(len(x_first_feature), dtype=int)
+            cluster_ids[x_first_feature <= 3] = 0
+            cluster_ids[(x_first_feature > 3) & (x_first_feature <= 6)] = 1
+            cluster_ids[x_first_feature > 6] = 2
+        else:
+            raise ValueError(f"Unknown setting: {self.setting}. Supported settings are 1, 2, 3.")
+            
+        return cluster_ids.tolist()
     
     def fit_clusters(self, X_val, R_val):
-        """Fit clusters on validation data"""
-        # Discretize features to create clusters
-        cluster_ids = self._discretize_features(X_val)
+        """Fit clusters on validation data using ground truth clustering"""
+        # Use ground truth clustering based on data generation process
+        cluster_ids = self._get_ground_truth_clusters(X_val)
         
         # Store residuals by cluster
         self.cluster_residuals = {}
@@ -115,8 +137,8 @@ class ClusterwiseOracle:
         quantiles = []
         coverage = []
         
-        # Get cluster assignments for test points
-        test_cluster_ids = self._discretize_features(X_test)
+        # Get cluster assignments for test points using ground truth
+        test_cluster_ids = self._get_ground_truth_clusters(X_test)
         
         for i, cluster_id in enumerate(test_cluster_ids):
             # Get residuals for this cluster
@@ -146,7 +168,7 @@ def run_simulation(num_samples=1200, alpha=0.1, setting=1, random_seed=42, n_tre
     np.random.seed(random_seed)
     
     X, Y = simulate_data(num_samples, setting)
-    X_train, X_val, X_test, Y_train, Y_val, Y_test, X_test_0 = train_val_test_split(X, Y, 1/3)
+    X_train, X_val, X_test, Y_train, Y_val, Y_test, X_val_0, X_test_0 = train_val_test_split(X, Y, p=1/4, p2=1/4)
     
     print(f"Data split: Train={len(X_train)}, Val={len(X_val)}, Test={len(X_test)}")
     
@@ -191,18 +213,32 @@ def run_simulation(num_samples=1200, alpha=0.1, setting=1, random_seed=42, n_tre
         }
     
     # --Cluster-wise Oracle Method
-    if setting != 1:
-        print("-- Running Cluster-wise Oracle...")
-        cluster_oracle = ClusterwiseOracle(setting=setting)
-        cluster_quantiles, cluster_coverage = cluster_oracle.calibrate(X_val, R_val, X_test, R_test,
-                                                                    predictions_test, alpha)
-        
-        results['Cluster-wise Oracle'] = {
-            'quantiles': cluster_quantiles,
-            'coverage': cluster_coverage,
-            'avg_length': np.mean(cluster_quantiles) * 2,
-            'coverage_rate': np.mean(cluster_coverage)
-        }
+    print("-- Running Cluster-wise Oracle...")
+    cluster_oracle = ClusterwiseOracle(setting=setting)
+    cluster_quantiles, cluster_coverage = cluster_oracle.calibrate(X_val_0, R_val, X_test_0, R_test,
+                                                                predictions_test, alpha)
+    
+    # show cluster information using original features
+    val_clusters = cluster_oracle._get_ground_truth_clusters(X_val_0)
+    unique_clusters, cluster_counts = np.unique(val_clusters, return_counts=True)
+    print(f"   Validation clusters found: {len(unique_clusters)} clusters")
+    for cluster_id, count in zip(unique_clusters, cluster_counts):
+        print(f"   Cluster {cluster_id}: {count} samples")
+    print(f"   X_val_0 first feature range: [{X_val_0[:, 0].min():.2f}, {X_val_0[:, 0].max():.2f}]")
+    
+    test_clusters = cluster_oracle._get_ground_truth_clusters(X_test_0)
+    unique_test_clusters, test_cluster_counts = np.unique(test_clusters, return_counts=True)
+    print(f"   Test clusters found: {len(unique_test_clusters)} clusters")
+    for cluster_id, count in zip(unique_test_clusters, test_cluster_counts):
+        print(f"   Test Cluster {cluster_id}: {count} samples")
+    print(f"   X_test_0 first feature range: [{X_test_0[:, 0].min():.2f}, {X_test_0[:, 0].max():.2f}]")
+
+    results['Cluster-wise Oracle'] = {
+        'quantiles': cluster_quantiles,
+        'coverage': cluster_coverage,
+        'avg_length': np.mean(cluster_quantiles) * 2,
+        'coverage_rate': np.mean(cluster_coverage)
+    }
     
     # PCP Method
     print("-- Running PCP...")    
@@ -326,11 +362,11 @@ def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
 def main():
     """Main simulation function"""
     # Simulation parameters
-    num_samples = 1200
+    num_samples = 2000
     alpha = 0.1
-    setting = 1
-    random_seed = 31
-    n_tree = 120
+    setting = 3
+    random_seed = 42
+    n_tree = 100
     
     print("Simulation Study: Comparing Conformal Prediction Methods")
     print(f"Sample size: {num_samples}")
