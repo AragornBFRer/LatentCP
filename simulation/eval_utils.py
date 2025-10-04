@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from eval_utils import OUTPATH_FIG
+from eval_const import OUTPATH_FIG
 
 
 def print_results(results, alpha):
@@ -30,7 +30,7 @@ def print_results(results, alpha):
 
 
 def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0, 
-                 num_samples=None, n_tree=None, seed=None, setting=None):
+                 num_samples=None, n_tree=None, seed=None, setting=None, save=True):
     """Plot prediction intervals for visual comparison"""
     
     # Sort by feature for better visualization
@@ -96,7 +96,10 @@ def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
         outpath = outpath.replace('.png', f'_seed{seed}.png')
     if setting is not None:
         outpath = outpath.replace('out/', f'out/setting{setting}/')
+    if feature_idx is not None:
+        outpath = outpath.replace('.png', f'_feature{feature_idx}.png')
     plt.tight_layout()
-    plt.savefig(outpath, dpi=150, bbox_inches='tight')
+    if save:
+        plt.savefig(outpath, dpi=150, bbox_inches='tight')
     plt.show()
 
