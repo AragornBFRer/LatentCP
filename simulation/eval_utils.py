@@ -29,15 +29,49 @@ def print_results(results, alpha):
     print("-" * 70)
 
 
-def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0, 
-                 num_samples=None, n_tree=None, seed=None, setting=None, save=True):
-    """Plot prediction intervals for visual comparison"""
+def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
+                 num_samples=None, n_tree=None, seed=None, setting=None,
+                 temperature=None,
+                 true_clusters=None, ambiguous_mask=None, noisy_labels=None,
+                 save=True, show=True):
+    """Plot prediction intervals for visual comparison.
+
+    Parameters
+    ----------
+    results : dict
+        Output dictionary from the simulation with quantiles and coverage per method.
+    X_test_0 : ndarray
+        Original (unstandardized) test features.
+    Y_test : ndarray
+        True responses on the test set.
+    predictions_test : ndarray
+        Model predictions on the test set.
+    feature_idx : int
+        Index of the feature to sort/plot along the x-axis.
+    temperature : float or None
+        Optional scalar describing the simulation temperature used to
+        modulate mixture separation; included in saved figure names when
+        provided.
+    true_clusters : ndarray or None
+        Optional array of ground-truth cluster ids for the test points; if provided the
+        scatter plot will be colour-coded accordingly.
+    ambiguous_mask : ndarray or None
+        Boolean mask indicating points in overlapped regions; highlighted with markers
+        when provided.
+    noisy_labels : ndarray or None
+        Optional array of noisy cluster labels for the test points (unused currently, but
+        included for potential legend annotations).
+    save : bool
+        Whether to write the figure to disk using ``OUTPATH_FIG`` formatting.
+    """
     
     # Sort by feature for better visualization
     sort_idx = np.argsort(X_test_0[:, feature_idx])
     x_vals = X_test_0[sort_idx, feature_idx]
     y_vals = Y_test[sort_idx]
     pred_vals = predictions_test[sort_idx]
+    clusters_sorted = true_clusters[sort_idx] if true_clusters is not None else None
+    ambiguous_sorted = ambiguous_mask[sort_idx] if ambiguous_mask is not None else None
     
     # Filter out failed methods for plotting
     plot_results_dict = {k: v for k, v in results.items() if not k.endswith('(Failed)')}
@@ -74,12 +108,41 @@ def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
         upper_bounds = pred_vals + quantiles_sorted
         
         # Plot data points and prediction intervals
-        ax.scatter(x_vals, y_vals, alpha=0.4, s=8, color='gray', label='True values')
+        if clusters_sorted is not None:
+            n_clusters = int(np.max(clusters_sorted)) + 1 if clusters_sorted.size else 1
+            cmap = plt.cm.get_cmap('tab10', n_clusters)
+            scatter = ax.scatter(
+                x_vals,
+                y_vals,
+                c=clusters_sorted,
+                cmap=cmap,
+                alpha=0.55,
+                s=12,
+                label='True values'
+            )
+            if i == 0:
+                fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.04, label='True cluster')
+        else:
+            ax.scatter(x_vals, y_vals, alpha=0.4, s=8, color='gray', label='True values')
+
+        if ambiguous_sorted is not None and np.any(ambiguous_sorted):
+            ax.scatter(
+                x_vals[ambiguous_sorted],
+                y_vals[ambiguous_sorted],
+                facecolors='none',
+                edgecolors='k',
+                linewidths=0.6,
+                s=32,
+                label='Ambiguous'
+            )
         ax.fill_between(x_vals, lower_bounds, upper_bounds, alpha=0.3, color=colors[i % len(colors)])
         ax.plot(x_vals, pred_vals, 'k--', alpha=0.7, label='Predictions', linewidth=1)
         
         avg_length = result["avg_length"] if np.isfinite(result["avg_length"]) else "∞"
-        ax.set_title(f'{method_name}\nCoverage: {result["coverage_rate"]:.3f}, Length: {avg_length}')
+        title = f'{method_name}\nCoverage: {result["coverage_rate"]:.3f}, Length: {avg_length}'
+        if ambiguous_sorted is not None:
+            title += f' | Ambig.: {np.mean(ambiguous_sorted):.3f}'
+        ax.set_title(title)
         ax.set_xlabel(f'Feature {feature_idx}')
         ax.set_ylabel('Response')
         ax.legend(fontsize=8)
@@ -94,12 +157,16 @@ def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
         outpath = outpath.replace('.png', f'_ntree{n_tree}.png')
     if seed is not None:
         outpath = outpath.replace('.png', f'_seed{seed}.png')
-    if setting is not None:
-        outpath = outpath.replace('out/', f'out/setting{setting}/')
     if feature_idx is not None:
         outpath = outpath.replace('.png', f'_feature{feature_idx}.png')
+    if temperature is not None:
+        temp_str = f"{float(temperature):.3f}".rstrip('0').rstrip('.')
+        outpath = outpath.replace('.png', f'_temp{temp_str}.png')
+    if setting is not None:
+        outpath = outpath.replace('.png', f'_{setting}.png')
     plt.tight_layout()
     if save:
         plt.savefig(outpath, dpi=150, bbox_inches='tight')
-    plt.show()
+    if show:
+        plt.show()
 

@@ -3,14 +3,9 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-try:
-    from .eval_const import OUTPATH_FIG
-    from .eval_utils2 import print_results, plot_results
-    from .eval2 import run_simulation
-except ImportError:  # pragma: no cover - fallback when run as a script
-    from eval_const import OUTPATH_FIG
-    from eval_utils2 import print_results, plot_results
-    from eval2 import run_simulation
+from eval_const import OUTPATH_FIG
+from eval_utils import print_results, plot_results
+from eval import run_simulation
 
 
 alpha = 0.1

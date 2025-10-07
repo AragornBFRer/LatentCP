@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.stats.mstats import mquantiles
+from scipy.special import logsumexp
 from sklearn.metrics import pairwise_distances, roc_auc_score, r2_score, pairwise_distances_argmin_min
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.model_selection import KFold
@@ -44,8 +45,10 @@ class PCP:
         self.n_c = None
         self.f = StandardScaler()
         self.state = np.random.get_state()
+        self.cluster_probs_calib = None
+        self.use_precomputed_clusters = False
 
-    def train(self, X, R, info=False):
+    def train(self, X, R, info=False, cluster_probs=None):
         """
         Choose the hyperparameters in PCP
 
@@ -67,11 +70,24 @@ class PCP:
         # Choose the best lambda to estimate P{R < xi | X} for the grid points xi and return the estimators
         Pred = self._cross_validation(X_, Y_)
 
-        # Determine the numer of clusters in our mixture model
-        self._determine_number_of_clusters(Pred)
+        r_squared = None
+        if cluster_probs is not None:
+            prob = ensure_probability_matrix(cluster_probs)
+            if prob.shape[0] != X.shape[0]:
+                raise ValueError(
+                    "cluster_probs must align with the number of calibration samples passed to train()."
+                )
+            self.use_precomputed_clusters = True
+            self.cluster_probs_calib = prob
+            self.n_c = prob.shape[1]
+        else:
+            # Determine the number of clusters in our mixture model using reconstruction quality
+            self.use_precomputed_clusters = False
+            self._determine_number_of_clusters(Pred)
 
-        # Construct the mixture model and return the membership probabilities and reconstruction r^2
-        prob, _, r_squared = mixture(Pred, self.n_c, self.state)
+            # Construct the mixture model and return the membership probabilities and reconstruction r^2
+            prob, _, r_squared = mixture(Pred, self.n_c, self.state)
+            self.cluster_probs_calib = prob
 
         # Determine the sample size m to generate the PCP interval
         m_ = self._determine_precision(R.shape[0], prob)
@@ -79,7 +95,10 @@ class PCP:
 
         # Print out information of our mixture model
         if info:
-            print("r_square:", r_squared)
+            if r_squared is not None:
+                print("r_square:", r_squared)
+            else:
+                print("r_square: (skipped - using provided cluster labels)")
             print("number of components:", self.n_c)
             print("sample size m:", self.m)
 
@@ -178,7 +197,8 @@ class PCP:
 
         return m_
 
-    def calibrate(self, X_val, R_val, X_test, R_test, alpha, return_pi=False, finite=False, max_iter=10, tol=0.005):
+    def calibrate(self, X_val, R_val, X_test, R_test, alpha, return_pi=False, finite=False,
+                  max_iter=10, tol=0.005, cluster_probs_val=None, cluster_probs_test=None):
         """
          Generate prediction intervals for a set of testing points using a set of calibration (validation) points
 
@@ -210,6 +230,35 @@ class PCP:
         R_grids = np.concatenate([[0], self.R_Q, [np.inf]])
         Y_val_ = np.array(R_val[:, None] <= self.R_Q)
 
+        # Resolve optional externally provided cluster probabilities
+        prob_val_external = cluster_probs_val
+        if prob_val_external is None and self.use_precomputed_clusters:
+            prob_val_external = self.cluster_probs_calib
+
+        use_external_membership = prob_val_external is not None or cluster_probs_test is not None
+
+        if use_external_membership:
+            if prob_val_external is None or cluster_probs_test is None:
+                raise ValueError(
+                    "Both cluster_probs_val and cluster_probs_test must be provided when bypassing k-means."
+                )
+
+            prob_val_external = ensure_probability_matrix(prob_val_external)
+            prob_test_external = ensure_probability_matrix(
+                cluster_probs_test, n_clusters=prob_val_external.shape[1]
+            )
+
+            if self.n_c is None:
+                self.n_c = prob_val_external.shape[1]
+            elif self.n_c != prob_val_external.shape[1]:
+                raise ValueError(
+                    "The supplied cluster probabilities have a different number of components than the PCP model."
+                )
+
+        else:
+            prob_val_external = None
+            prob_test_external = None
+
         # Prepare the matrix for cross-fitting the estimators of P{R < xi) for the grid points xi
         self._cross_fitting(X_val_, Y_val_)
 
@@ -229,8 +278,11 @@ class PCP:
                 else:
                     self.update(x, t)
 
-                # Refit the mixture model
-                prob, mu, _ = mixture(self.E_Y, self.n_c, self.state, max_iter=max_iter, tol=tol)
+                # Refit the mixture model or use pre-computed membership probabilities
+                if use_external_membership:
+                    prob = np.vstack([prob_val_external, prob_test_external[j]])
+                else:
+                    prob, mu, _ = mixture(self.E_Y, self.n_c, self.state, max_iter=max_iter, tol=tol)
                 random.seed(seeds[j])
                 idx = random.choices(population=range(self.n_c), weights=prob[-1], k=self.m)
                 s = np.sum(np.log(prob_clip(prob)[:, idx]), 1)
@@ -267,7 +319,10 @@ class PCP:
                     else:
                         self.update(x, t)
 
-                prob, mu, _ = mixture(self.E_Y, self.n_c, self.state, max_iter=max_iter, tol=tol)
+                if use_external_membership:
+                    prob = np.vstack([prob_val_external, prob_test_external[j]])
+                else:
+                    prob, mu, _ = mixture(self.E_Y, self.n_c, self.state, max_iter=max_iter, tol=tol)
                 random.seed(seeds[j])
                 idx = random.choices(population=range(self.n_c), weights=prob[-1], k=self.m)
                 pi_list.append([np.mean(np.array(idx) == i) for i in range(self.n_c)])
@@ -481,6 +536,39 @@ def prob_clip(prob, epsilon=1e-8):
 
 def prob_smoother(prob, epsilon=0.025):
     return (prob + epsilon) / (1 + np.shape(prob)[1] * epsilon)
+
+
+def ensure_probability_matrix(labels_or_probs, n_clusters=None):
+    """Convert integer labels or probability-like inputs to a 2-D probability matrix."""
+
+    arr = np.asarray(labels_or_probs)
+
+    if arr.ndim == 1:
+        if n_clusters is None:
+            n_clusters = int(np.max(arr)) + 1
+        if n_clusters <= 0:
+            raise ValueError("n_clusters must be positive.")
+        arr_int = arr.astype(int)
+        if np.any(arr_int < 0) or np.any(arr_int >= n_clusters):
+            raise ValueError("Label indices must be in [0, n_clusters).")
+        prob = np.zeros((arr.shape[0], n_clusters), dtype=float)
+        prob[np.arange(arr.shape[0]), arr_int] = 1.0
+        return prob
+
+    if arr.ndim == 2:
+        if n_clusters is not None and arr.shape[1] != n_clusters:
+            raise ValueError("Probability matrices must have n_clusters columns.")
+        if np.any(arr < 0):
+            raise ValueError("Probabilities must be non-negative.")
+        row_sums = arr.sum(axis=1, keepdims=True)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            normed = np.divide(arr, row_sums, out=np.zeros_like(arr, dtype=float), where=row_sums > 0)
+        zero_row = np.where(row_sums.squeeze() == 0)[0]
+        if zero_row.size > 0:
+            normed[zero_row] = 1.0 / arr.shape[1]
+        return normed
+
+    raise ValueError("labels_or_probs must be a 1D label array or 2D probability matrix.")
 
 
 def SCP(R_val, R_test, alpha=0.1, finite=False):
@@ -1181,217 +1269,185 @@ def replace_nan_columns_with_ones(X):
     return X
 
 
+def _precompute_gaussian_stats(covariances):
+    inv_covs = []
+    log_dets = []
+    for cov in covariances:
+        inv_covs.append(np.linalg.inv(cov))
+        sign, logdet = np.linalg.slogdet(cov)
+        if sign <= 0:
+            raise ValueError("Covariance matrix must be positive definite.")
+        log_dets.append(logdet)
+    return np.array(inv_covs), np.array(log_dets)
+
+
+def assign_noisy_labels(posterior_probs, true_labels, rng, margin=0.2):
+    """Assign labels that are perfect in clear regions and randomized in overlaps."""
+
+    n_samples, n_clusters = posterior_probs.shape
+    noisy_labels = np.zeros(n_samples, dtype=int)
+    membership = np.zeros((n_samples, n_clusters), dtype=float)
+    ambiguous_mask = np.zeros(n_samples, dtype=bool)
+    confidence_gap = np.zeros(n_samples, dtype=float)
+
+    for i in range(n_samples):
+        probs = posterior_probs[i]
+        order = np.argsort(probs)[::-1]
+        top1 = order[0]
+        top1_prob = probs[top1]
+        top2_prob = probs[order[1]] if n_clusters > 1 else 0.0
+        confidence_gap[i] = top1_prob - top2_prob
+
+        if (top1_prob - top2_prob) >= margin or n_clusters == 1:
+            assigned = int(true_labels[i])
+        else:
+            ambiguous_mask[i] = True
+            choices = order[:min(2, n_clusters)]
+            assigned = int(rng.choice(choices))
+
+        noisy_labels[i] = assigned
+        membership[i, assigned] = 1.0
+
+    return noisy_labels, membership, ambiguous_mask, confidence_gap
+
+
 def simulate_data(num_samples,
-                  setting,
-                  # --- simple, small set of parameters for settings 4 & 5 ---
-                  p=50,                 # number of features for high-dim settings
-                  K=3,                  # number of clusters
-                  s=5,                  # active features per cluster (setting 4)
-                  num_active_blocks=2,  # active blocks per cluster (setting 5)
-                  block_size=None,      # block size for setting 5; if None choose automatically
-                  sigma=1.0,            # noise std (same for all clusters)
-                  return_meta=False,
-                  random_state=None):
-    """Simple simulator.
+                  K=3,
+                  d=2,
+                  weights=None,
+                  mean_scale=4.0,
+                  temperature=1.0,
+                  cluster_spread=1.0,
+                  response_noise=0.5,
+                  deterministic_margin=0.2,
+                  random_state=None,
+                  return_meta=False):
+    """Generate regression data from a Gaussian mixture with latent clusters.
 
-    - Settings 1..3: original setting.
-    - Setting 4: clustered sparse linear model. X ~ N(0, I_p); each cluster k has
-      s nonzero coordinates in beta^{(k)} (chosen at random). Y = X^T beta^{(c)} + noise.
-    - Setting 5: block-wise / group-sparse clusters. Partition {1..p} into blocks of
-      size `block_size` (or chosen automatically). Each cluster activates a few blocks;
-      coefficients inside active blocks are nonzero.
+    The simulation proceeds as follows:
+    1. Sample component weights, means, and diagonal covariances.
+    2. Draw feature vectors ``X`` and latent cluster labels ``z`` from the mixture.
+    3. Generate responses ``Y`` from cluster-specific linear models with noise.
+    4. Derive "noisy" cluster labels that are correct in clearly separated regions
+       and randomized within overlapping regions.
 
-    Args
-    ----
+    Parameters
+    ----------
     num_samples : int
         Number of samples to generate.
-    setting : int
-        Which setting to use (1..5).
-    p : int, optional
-        Number of features (for settings 4 & 5). Default is 50.
-    K : int, optional
-        Number of clusters (for settings 4 & 5). Default is 3.
-    s : int, optional
-        Number of active features per cluster (for setting 4). Default is 5.
-    num_active_blocks : int, optional
-        Number of active blocks per cluster (for setting 5). Default is 2.
-    block_size : int or None, optional
-        Block size (for setting 5). If None, choose automatically. Default is None.
-    sigma : float, optional
-        Noise standard deviation (for settings 4 & 5). Default is 1.0.
-    return_meta : bool, optional
-        Whether to return metadata (betas, supports/active_blocks, clusters). Default is False.
-    random_state : int or None, optional
-        Random seed for reproducibility. Default is None.
-
-    Returns
-    -------
-    X_out : ndarray, shape (n, d)
-        Feature matrix. For settings 1..3 d==6 (original small features). For 4..5 d==p.
-    Y : ndarray, shape (n,)
-        Response vector.
-    (optional) meta : dict
-        If return_meta=True, returns a dict with simple metadata: 'betas',
-        'supports' or 'active_blocks', and 'clusters'.
+    K : int
+        Number of Gaussian components / latent clusters.
+    d : int
+        Dimensionality of the covariates.
+    weights : array-like or None
+        Mixture weights. If ``None``, use a uniform distribution.
+    mean_scale : float
+        Scale of component means.
+    temperature : float
+        Controls the separation between mixture components; values > 1 spread
+        clusters farther apart while values < 1 increase their overlap.
+    cluster_spread : float
+        Typical standard deviation per feature inside each component before
+        temperature scaling is applied.
+    response_noise : float
+        Baseline noise scale for the response (cluster-specific noise is sampled
+        around this value).
+    deterministic_margin : float
+        Threshold on the posterior gap that determines whether a point is deemed
+        "clearly" assigned to its true cluster.
+    random_state : int or None
+        Random seed for reproducibility.
+    return_meta : bool
+        When ``True`` return an auxiliary metadata dictionary containing latent
+        structure and labeling diagnostics.
     """
 
     rng = np.random.default_rng(random_state)
 
-    # --- settings 1-3: keep original small-data behaviour (simple) ---
-    if setting in (1, 2, 3):
+    temperature = float(temperature)
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
 
-        X = np.random.rand(num_samples, 1) * 8
-        X2 = np.random.rand(num_samples, 5) * 8
-        beta2 = np.random.randn(5)
-        noise = np.random.normal(0, 1, num_samples)
-        X_0 = PolynomialFeatures(2, include_bias=False).fit_transform(X)
-        X_ = np.concatenate([X_0, X * np.sin(X), X2], axis=1)
-        beta = np.concatenate([np.array([-3, 1, -5]), beta2])
+    separation_scale = max(temperature, 1e-3)
+    mean_scale_eff = mean_scale * separation_scale
+    spread_scale_eff = cluster_spread / separation_scale
+    if spread_scale_eff <= 0:
+        raise ValueError("cluster_spread and temperature combination must yield positive spread")
 
-        if setting == 1:
-            Y = np.dot(X_, beta) + 4 * noise * (1 + 0.5 * abs(X[:, 0] - 3) ** 2)
-        if setting == 2:
-            Y = np.dot(X_, beta) + 4 * noise * (1 + 3 * (X[:, 0] <= 5))
-            # + np.dot(X2, beta2)
-        if setting == 3:
-            # <=3, (3,6], >6
-            Y = np.dot(X_, beta) + 4 * noise * (1 + 3 * (X[:, 0] <= 3) + 3 * (X[:, 0] > 6))
-        X_out = np.concatenate([X, X2], axis=1)
+    if weights is None:
+        weights = np.ones(K) / K
+    else:
+        weights = np.asarray(weights, dtype=float)
+        if weights.ndim != 1 or weights.size != K:
+            raise ValueError("weights must be a 1-D array of length K")
+        if np.any(weights < 0):
+            raise ValueError("Mixture weights must be non-negative")
+        weights = weights / weights.sum()
 
-        return X_out, Y
+    # Sample latent component for each observation
+    assignments = rng.choice(K, size=num_samples, p=weights)
 
-    # simple feature matrix: iid standard normal columns
-    X_hd = rng.standard_normal((num_samples, p))
+    # Component means and diagonal covariance structure
+    means = rng.normal(loc=0.0, scale=mean_scale_eff, size=(K, d))
+    covariances = []
+    for _ in range(K):
+        scales = spread_scale_eff * rng.uniform(0.5, 1.5, size=d)
+        covariances.append(np.diag(scales ** 2))
+    covariances = np.array(covariances)
 
-    # cluster assignments (uniform by default)
-    clusters = rng.integers(low=0, high=K, size=num_samples)
+    # Draw features conditioned on assignments
+    X = np.zeros((num_samples, d))
+    for k in range(K):
+        idx = np.where(assignments == k)[0]
+        if idx.size > 0:
+            X[idx] = rng.multivariate_normal(mean=means[k], cov=covariances[k], size=idx.size)
 
-    betas = np.zeros((K, p))
+    # Cluster-specific linear predictors and heteroscedastic noise
+    betas = rng.normal(loc=0.0, scale=1.0, size=(K, d))
+    intercepts = rng.normal(loc=0.0, scale=0.5, size=K)
+    noise_scales = np.maximum(rng.normal(loc=response_noise, scale=0.1, size=K), 0.05)
 
-    # --- settings 4 & 5: simplified high-dimensional setups ---
-    if setting == 4:
-        # Clustered sparse linear model
-        supports = []
-        for k in range(K):
-            # choose s indices (if s>p, use all)
-            s_k = min(s, p)
-            support_k = rng.choice(p, size=s_k, replace=False)
-            supports.append(np.sort(support_k))
-            # simple coefficient values ~ N(0, 1)
-            betas[k, support_k] = rng.standard_normal(s_k)
+    linear_signal = np.sum(X * betas[assignments], axis=1) + intercepts[assignments]
+    noise = rng.normal(scale=noise_scales[assignments], size=num_samples)
+    Y = linear_signal + noise
 
-        # predictions: pick the beta corresponding to each example's cluster
-        preds = np.sum(X_hd * betas[clusters], axis=1)
-        Y = preds + sigma * rng.standard_normal(num_samples)
+    # Posterior probabilities under the true mixture
+    inv_covs, log_dets = _precompute_gaussian_stats(covariances)
+    log_probs = np.zeros((num_samples, K))
+    const = d * np.log(2 * np.pi)
+    for k in range(K):
+        diff = X - means[k]
+        quad = np.einsum('ij,jk,ik->i', diff, inv_covs[k], diff)
+        log_probs[:, k] = np.log(weights[k]) - 0.5 * (const + log_dets[k] + quad)
+    log_norm = logsumexp(log_probs, axis=1, keepdims=True)
+    posterior = np.exp(log_probs - log_norm)
 
-        X_out = X_hd
-        meta = {'betas': betas, 'supports': supports, 'clusters': clusters}
+    # Derive noisy labels mimicking imperfect clustering
+    noisy_labels, noisy_membership, ambiguous_mask, confidence_gap = assign_noisy_labels(
+        posterior, assignments, rng, margin=deterministic_margin
+    )
 
-    if setting == 5:  # setting == 5
-        # Block-wise active features / group-sparse clusters
-        if block_size is None:
-            # choose about 10 blocks or at least size 1
-            B = min(10, max(1, p))
-            block_size = max(1, p // B)
-        B = int(np.ceil(p / block_size))
-        blocks = [np.arange(b * block_size, min((b + 1) * block_size, p)) for b in range(B)]
-
-        active_blocks_list = []
-        for k in range(K):
-            nb = min(num_active_blocks, B)
-            active_blocks = rng.choice(B, size=nb, replace=False)
-            active_blocks_list.append(np.sort(active_blocks))
-            # set coefficients inside chosen blocks
-            for b in active_blocks:
-                idxs = blocks[b]
-                betas[k, idxs] = rng.standard_normal(idxs.size)
-
-        preds = np.sum(X_hd * betas[clusters], axis=1)
-        Y = preds + sigma * rng.standard_normal(num_samples)
-
-        X_out = X_hd
-        meta = {'betas': betas, 'active_blocks': active_blocks_list, 'blocks': blocks, 'clusters': clusters}
-
-
-    # --- setting 6 & 7: cluster by ||X||_2 and make Y depend on magnitude, with very different noise scales ---
-    if setting in (6, 7):
-        X_out = X_hd
-        
-        # compute L2 norms
-        norms = np.linalg.norm(X_hd, axis=1)  # shape (n,)
-        min_norm, max_norm = float(norms.min()), float(norms.max())
-
-        # define equal-width bin edges from min to max into K bins
-        # if all norms are equal (degenerate), put everything into cluster 0
-        if max_norm - min_norm < 1e-12:
-            cluster_by_norm = np.zeros(num_samples, dtype=int)
-            edges = np.array([min_norm, max_norm])
-        else:
-            edges = np.linspace(min_norm, max_norm, num=K + 1)
-            # digitize into 0..K-1
-            # np.digitize returns 1..len(bins) with bins as edges[1:-1]; transform to 0..K-1
-            cluster_by_norm = np.digitize(norms, bins=edges[1:-1], right=True)
-            # cluster_by_norm already in 0..K-1
-
-        # Create widely-varying noise scales across clusters (use logspace for big differences)
-        # base sigma is multiplied by these factors to produce per-cluster noise std.
-        log_factors = np.logspace(-1, 1, num=K)  # factors from 0.1 .. 10 (vary a lot)
-        # Add a little random jitter so different seeds produce slightly different factor ordering
-        jitter = rng.uniform(0.8, 1.2, size=K)
-        noise_factors = log_factors * jitter
-        noise_scales = sigma * noise_factors  # final per-cluster noise stds
-
-        # cluster-level offsets / multipliers for the deterministic part
-        # keep them modest so magnitude remains the main driver
-        cluster_offsets = rng.normal(loc=0.0, scale=0.5, size=K)
-        cluster_multipliers = rng.normal(loc=1.0, scale=0.25, size=K)
-
-    # Construct Y for setting 6 (linear in norm) and 7 (nonlinear)
-    if setting == 6:
-        # linear relation: Y = a + b * ||X||_2 * multiplier(cluster) + offset(cluster) + noise(cluster)
-        a = 0.5  # global intercept
-        b = 2.0  # slope for the norm
-        linear_signal = a + b * norms * cluster_multipliers[cluster_by_norm] + cluster_offsets[cluster_by_norm]
-        noise = rng.normal(loc=0.0, scale=noise_scales[cluster_by_norm], size=num_samples)
-        Y = linear_signal + noise
-
-        meta = {
-            'norms': norms,
-            'cluster_edges': edges,
-            'clusters': cluster_by_norm,  # For backward compatibility
-            'clusters_by_norm': cluster_by_norm,
-            'noise_scales': noise_scales,
-            'cluster_offsets': cluster_offsets,
-            'cluster_multipliers': cluster_multipliers,
-            'setting_description': 'linear-in-norm with widely varying cluster noise scales'
-        }
-
-    if setting == 7:  # setting == 7
-        # nonlinear relation: e.g. sinusoidal in normalized norm plus a magnitude-based trend:
-        # Y = (sin(pi * norm / max_norm) + 0.3 * (norm / max_norm)**0.5) * (1 + small cluster multiplier) + offset + noise
-        # normalize norms to [0,1] using max_norm (if max_norm==0 use 1)
-        denom = max_norm if max_norm > 0 else 1.0
-        norm_unit = norms / denom
-        nonlinear_signal = (np.sin(np.pi * norm_unit) + 0.3 * np.sqrt(np.maximum(norm_unit, 0))) \
-                           * (1.0 + 0.5 * cluster_multipliers[cluster_by_norm]) \
-                           + cluster_offsets[cluster_by_norm]
-        noise = rng.normal(loc=0.0, scale=noise_scales[cluster_by_norm], size=num_samples)
-        Y = nonlinear_signal + noise
-
-        meta = {
-            'norms': norms,
-            'cluster_edges': edges,
-            'clusters': cluster_by_norm,  # For backward compatibility
-            'clusters_by_norm': cluster_by_norm,
-            'noise_scales': noise_scales,
-            'cluster_offsets': cluster_offsets,
-            'cluster_multipliers': cluster_multipliers,
-            'setting_description': 'nonlinear-in-norm (sin + sqrt trend) with widely varying cluster noise scales'
-        }
+    meta = {
+        'true_clusters': assignments,
+        'noisy_labels': noisy_labels,
+        'noisy_membership': noisy_membership,
+        'posterior_probs': posterior,
+        'ambiguous_mask': ambiguous_mask,
+        'confidence_gap': confidence_gap,
+        'weights': weights,
+        'means': means,
+        'covariances': covariances,
+        'betas': betas,
+        'intercepts': intercepts,
+        'noise_scales': noise_scales,
+        'deterministic_margin': deterministic_margin,
+        'dimension': d,
+        'temperature': temperature,
+    }
 
     if return_meta:
-        return X_out, Y, meta
-    return X_out, Y
+        return X, Y, meta
+    return X, Y
 
 
 
