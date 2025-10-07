@@ -15,12 +15,13 @@ except ImportError:  # pragma: no cover - fallback when run as a script
 
 alpha = 0.1
 random_seed = 42
-num_samples = 1500
+num_samples = 2000
 
 gmm_params = {
     "K": 3,
     "d": 4,
     "mean_scale": 4.0,
+    "temperature": 0.75,
     "cluster_spread": 1.0,
     "response_noise": 0.6,
     "deterministic_margin": 0.2,
@@ -41,8 +42,8 @@ rf_params = {
 }
 
 split_params = {
-    "train_ratio": 0.35,
-    "val_ratio": 0.35,
+    "train_ratio": 0.375,
+    "val_ratio": 0.125,
 }
 
 print("Basic simulation parameters:")
@@ -96,23 +97,47 @@ print(f"- Ambiguous region rate (test): {ambiguous_rate:.3f}")
 
 feature_indices = list(range(min(3, X_test_0.shape[1]))) or [0]
 
-for feat_idx in feature_indices:
-    print(f"\nGenerating plots for feature {feat_idx}...")
-    plot_results(
-        results,
-        X_test_0,
-        Y_test,
-        predictions_test,
-        feature_idx=feat_idx,
-        num_samples=num_samples,
-        n_tree=rf_params['n_estimators'],
-        seed=random_seed,
-        setting=f"gmm_K{gmm_params['K']}_d{gmm_params['d']}",
-        true_clusters=true_clusters,
-        ambiguous_mask=ambiguous_mask,
-        noisy_labels=noisy_labels,
-        save=True,
-    )
+if len(feature_indices) < 3:
+    for feat_idx in feature_indices:
+        print(f"\nGenerating plots for feature {feat_idx}...")
+        plot_results(
+            results,
+            X_test_0,
+            Y_test,
+            predictions_test,
+            feature_idx=feat_idx,
+            num_samples=num_samples,
+            n_tree=rf_params['n_estimators'],
+            seed=random_seed,
+            setting=f"gmm_K{gmm_params['K']}_d{gmm_params['d']}",
+            temperature=gmm_params['temperature'],
+            true_clusters=true_clusters,
+            ambiguous_mask=ambiguous_mask,
+            noisy_labels=noisy_labels,
+            save=True,
+        )
+else:
+    print("\nRandomly selecting 3 features for plotting...")
+    selected_feats = np.random.choice(feature_indices, size=3, replace=False)
+    for feat_idx in selected_feats:
+        print(f"\nGenerating plots for feature {feat_idx}...")
+        plot_results(
+            results,
+            X_test_0,
+            Y_test,
+            predictions_test,
+            feature_idx=feat_idx,
+            num_samples=num_samples,
+            n_tree=rf_params['n_estimators'],
+            seed=random_seed,
+            setting=f"gmm_K{gmm_params['K']}_d{gmm_params['d']}",
+            temperature=gmm_params['temperature'],
+            true_clusters=true_clusters,
+            ambiguous_mask=ambiguous_mask,
+            noisy_labels=noisy_labels,
+            save=True,
+            show=False,
+        )
 
 out_fig = OUTPATH_FIG.format(num_samples=num_samples)
 print(f"\nSimulation completed! Check '{out_fig}' for plots.")

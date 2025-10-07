@@ -48,8 +48,7 @@ class ClusterwiseOracle:
         for i, cluster_id in enumerate(test_cluster_ids):
             residuals = self.cluster_residuals.get(int(cluster_id))
             if residuals is None or residuals.size == 0:
-                quantile = global_quantile
-                missing_clusters.add(int(cluster_id))
+                raise ValueError(f"Cluster {cluster_id} not found in validation set.")
             elif residuals.size == 1:
                 quantile = residuals[0]
             else:
@@ -63,13 +62,13 @@ class ClusterwiseOracle:
 
 
 def run_simulation(num_samples=1200, alpha=0.1, random_seed=42, pcp_fold=20, pcp_grid=20,
-                   K=3, d=2, mean_scale=4.0, cluster_spread=1.0, response_noise=0.5,
+                   K=3, d=2, mean_scale=4.0, temperature=1.0, cluster_spread=1.0, response_noise=0.5,
                    deterministic_margin=0.2, n_estimators=200, max_features='sqrt', max_depth=None,
                    min_samples_leaf=5, min_samples_split=10, n_jobs=-1,
                    train_ratio=0.4, val_ratio=0.3):
     """Run the GMM-based simulation comparing SCP, Oracle, and PCP."""
 
-    print(f"Running GMM simulation with {num_samples} samples, alpha={alpha}, K={K}, d={d}")
+    print(f"Running GMM simulation with {num_samples} samples, alpha={alpha}, K={K}, d={d}, temperature={temperature}")
     print("=" * 70)
 
     X, Y, meta = simulate_data(
@@ -77,6 +76,7 @@ def run_simulation(num_samples=1200, alpha=0.1, random_seed=42, pcp_fold=20, pcp
         K=K,
         d=d,
         mean_scale=mean_scale,
+        temperature=temperature,
         cluster_spread=cluster_spread,
         response_noise=response_noise,
         deterministic_margin=deterministic_margin,
@@ -187,6 +187,7 @@ def run_simulation(num_samples=1200, alpha=0.1, random_seed=42, pcp_fold=20, pcp
         'true_clusters_test': test_true_clusters,
         'ambiguous_mask_test': test_ambiguous,
         'noisy_labels_test': test_noisy,
+        'temperature': temperature,
     }
 
     return results, X_test_0, Y_test, predictions_test, diagnostics
@@ -200,12 +201,13 @@ def main():
     random_seed = 42
     K = 3
     d = 2
+    temperature = 1.0
     n_estimators = 200
     
     print("Simulation Study: Comparing Conformal Prediction Methods")
     print(f"Sample size: {num_samples}")
     print(f"Alpha (significance level): {alpha}")
-    print(f"Gaussian mixture: K={K}, d={d}")
+    print(f"Gaussian mixture: K={K}, d={d}, temperature={temperature}")
     
     # Run simulation
     results, X_test_0, Y_test, predictions_test, diagnostics = run_simulation(
@@ -214,6 +216,7 @@ def main():
         random_seed=random_seed,
         K=K,
         d=d,
+        temperature=temperature,
         n_estimators=n_estimators,
     )
     
@@ -254,6 +257,7 @@ def main():
         n_tree=n_estimators,
         seed=random_seed,
         setting=f"gmm_K{K}_d{d}",
+        temperature=temperature,
         true_clusters=diagnostics['true_clusters_test'],
         ambiguous_mask=diagnostics['ambiguous_mask_test'],
     )

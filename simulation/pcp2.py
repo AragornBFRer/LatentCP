@@ -1316,6 +1316,7 @@ def simulate_data(num_samples,
                   d=2,
                   weights=None,
                   mean_scale=4.0,
+                  temperature=1.0,
                   cluster_spread=1.0,
                   response_noise=0.5,
                   deterministic_margin=0.2,
@@ -1342,8 +1343,12 @@ def simulate_data(num_samples,
         Mixture weights. If ``None``, use a uniform distribution.
     mean_scale : float
         Scale of component means.
+    temperature : float
+        Controls the separation between mixture components; values > 1 spread
+        clusters farther apart while values < 1 increase their overlap.
     cluster_spread : float
-        Typical standard deviation per feature inside each component.
+        Typical standard deviation per feature inside each component before
+        temperature scaling is applied.
     response_noise : float
         Baseline noise scale for the response (cluster-specific noise is sampled
         around this value).
@@ -1359,6 +1364,16 @@ def simulate_data(num_samples,
 
     rng = np.random.default_rng(random_state)
 
+    temperature = float(temperature)
+    if temperature <= 0:
+        raise ValueError("temperature must be positive")
+
+    separation_scale = max(temperature, 1e-3)
+    mean_scale_eff = mean_scale * separation_scale
+    spread_scale_eff = cluster_spread / separation_scale
+    if spread_scale_eff <= 0:
+        raise ValueError("cluster_spread and temperature combination must yield positive spread")
+
     if weights is None:
         weights = np.ones(K) / K
     else:
@@ -1373,10 +1388,10 @@ def simulate_data(num_samples,
     assignments = rng.choice(K, size=num_samples, p=weights)
 
     # Component means and diagonal covariance structure
-    means = rng.normal(loc=0.0, scale=mean_scale, size=(K, d))
+    means = rng.normal(loc=0.0, scale=mean_scale_eff, size=(K, d))
     covariances = []
     for _ in range(K):
-        scales = cluster_spread * rng.uniform(0.5, 1.5, size=d)
+        scales = spread_scale_eff * rng.uniform(0.5, 1.5, size=d)
         covariances.append(np.diag(scales ** 2))
     covariances = np.array(covariances)
 
@@ -1427,6 +1442,7 @@ def simulate_data(num_samples,
         'noise_scales': noise_scales,
         'deterministic_margin': deterministic_margin,
         'dimension': d,
+        'temperature': temperature,
     }
 
     if return_meta:

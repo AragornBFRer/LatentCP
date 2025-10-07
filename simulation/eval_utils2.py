@@ -34,8 +34,9 @@ def print_results(results, alpha):
 
 def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
                  num_samples=None, n_tree=None, seed=None, setting=None,
+                 temperature=None,
                  true_clusters=None, ambiguous_mask=None, noisy_labels=None,
-                 save=True):
+                 save=True, show=True):
     """Plot prediction intervals for visual comparison.
 
     Parameters
@@ -50,6 +51,10 @@ def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
         Model predictions on the test set.
     feature_idx : int
         Index of the feature to sort/plot along the x-axis.
+    temperature : float or None
+        Optional scalar describing the simulation temperature used to
+        modulate mixture separation; included in saved figure names when
+        provided.
     true_clusters : ndarray or None
         Optional array of ground-truth cluster ids for the test points; if provided the
         scatter plot will be colour-coded accordingly.
@@ -157,10 +162,14 @@ def plot_results(results, X_test_0, Y_test, predictions_test, feature_idx=0,
         outpath = outpath.replace('.png', f'_seed{seed}.png')
     if feature_idx is not None:
         outpath = outpath.replace('.png', f'_feature{feature_idx}.png')
+    if temperature is not None:
+        temp_str = f"{float(temperature):.3f}".rstrip('0').rstrip('.')
+        outpath = outpath.replace('.png', f'_temp{temp_str}.png')
     if setting is not None:
         outpath = outpath.replace('.png', f'_{setting}.png')
     plt.tight_layout()
     if save:
         plt.savefig(outpath, dpi=150, bbox_inches='tight')
-    plt.show()
+    if show:
+        plt.show()
 
