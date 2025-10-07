@@ -46,7 +46,7 @@ split_params = {
     "val_ratio": 0.125,
 }
 
-output_dir = Path("out") / "low dim (large batch)"
+output_dir = Path("out") / "high dim (large batch)"
 output_dir.mkdir(parents=True, exist_ok=True)
 
 print("Basic simulation parameters:")
