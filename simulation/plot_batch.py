@@ -147,24 +147,28 @@ def plot_coverage_and_efficiency(
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-# read from the files generated in test_batch.py
+#### ==================================================================== 
+# TODO: read from the files generated in test_batch.py
 alpha = 0.1
 num_samples = 2000
 num_trials = 100
 gmm_params = {
-    "temperature": 0.75,
-    "deterministic_margin": 0.2,
-    "K": 3,
+    "K": 5,                      # More clusters → more ambiguity 
     "d": 4,
+    "mean_scale": 2.0,           # Smaller scale → more overlap between clusters
+    "temperature": 0.3,          # Lower temperature → less sharp boundaries, more ambiguity
+    "cluster_spread": 2.0,       # Higher spread → more overlap
+    "response_noise": 1.5,       # Much higher noise level
+    "deterministic_margin": 0.05, # Much smaller margin → more ambiguous regions
 }
-
 output_dir = Path("out") / "low dim (large batch)"
+#### ==================================================================== 
+
 identifier = (
     f"samples{num_samples}_trials{num_trials}_"
     f"temperature{gmm_params['temperature']}_margin{gmm_params['deterministic_margin']}_"
     f"K{gmm_params['K']}_d{gmm_params['d']}"
 )
-# TODO read from filesystem and get the parameters, ask user which to visualize if multiple exist
 
 # Read the merged results file
 results_path = output_dir / f"result_{identifier}.csv"
