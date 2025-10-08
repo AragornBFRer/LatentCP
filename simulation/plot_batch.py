@@ -150,18 +150,18 @@ def plot_coverage_and_efficiency(
 #### ==================================================================== 
 # TODO: read from the files generated in test_batch.py
 alpha = 0.1
-num_samples = 2000
+num_samples = 500  # Reduced sample size to make p > n more pronounced
 num_trials = 100
 gmm_params = {
-    "K": 5,                      # More clusters → more ambiguity 
-    "d": 4,
-    "mean_scale": 2.0,           # Smaller scale → more overlap between clusters
-    "temperature": 0.3,          # Lower temperature → less sharp boundaries, more ambiguity
-    "cluster_spread": 2.0,       # Higher spread → more overlap
-    "response_noise": 1.5,       # Much higher noise level
-    "deterministic_margin": 0.05, # Much smaller margin → more ambiguous regions
+    "K": 3,
+    "d": 800,  # High dimensional: p = 800 >> n = 500
+    "mean_scale": 4.0,
+    "temperature": 0.75,
+    "cluster_spread": 1.0,
+    "response_noise": 0.6,
+    "deterministic_margin": 0.2,
 }
-output_dir = Path("out") / "low dim (large batch)"
+output_dir = Path("out") / "high dim (large batch)"
 #### ==================================================================== 
 
 identifier = (
