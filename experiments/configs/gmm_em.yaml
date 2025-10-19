@@ -8,15 +8,15 @@ global:
   alpha: 0.1
 
 dgp:
-  K_list: [2, 3]
+  K_list: [2, 3, 5, 7, 10]     # number of clusters
   d_R: 4
   d_X: 6
   use_S: "R"        # "R" or "RX"
-  delta_list: [0.5, 1.5]
+  delta_list: [0.1, 0.5, 1.0, 1.5, 2.0]     # controls cluster separation
   sigma_s: 1.0
   cov_type_true: "full"
   rho_rx: 0.0
-  beta_spread_list: [0.0, 1.0]
+  beta_spread_list: [0.0, 0.5, 1.0, 1.5, 2.0]   # controls slope heterogeneity
   sigma_y: 1.0
 
 em_fit:
