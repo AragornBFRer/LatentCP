@@ -4,3 +4,4 @@ archive/
 *.ipynb
 .vscode/
 .DS_Store
+AGENTS.md
