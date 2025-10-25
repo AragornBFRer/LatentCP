@@ -1,23 +1,22 @@
 global:
-  seeds:
-    start: 1
-    stop: 101
-  n_train: 1000
-  n_cal: 1000
-  n_test: 2000
+  seeds: [1]
+  n_train: 1500
+  n_cal: 1500
+  n_test: 3000
   alpha: 0.1
 
 dgp:
-  K_list: [2, 3, 5, 7, 10]     # number of clusters
-  d_R: 4
-  d_X: 6
-  use_S: "R"        # "R" or "RX"
-  delta_list: [0.1, 0.5, 1.0, 1.5, 2.0]     # controls cluster separation
+  K_list: [2]
+  d_R: 5
+  d_X: 10
+  use_S: "RX"
+  delta_list: [0.5, 1.0]
   sigma_s: 1.0
   cov_type_true: "full"
-  rho_rx: 0.0
-  beta_spread_list: [0.0, 0.5, 1.0, 1.5, 2.0]   # controls slope heterogeneity
-  sigma_y: 1.0
+  rho_list: [0.0, 0.3]
+  sigma_y_list: [0.5, 1.0]
+  b_scale_list: [0.5, 1.0]
+  mu_x_shift: 0.0
 
 em_fit:
   K_fit: null
@@ -26,12 +25,12 @@ em_fit:
   max_iter: 200
   tol: 1e-5
   init: "kmeans"
-  use_X_in_em: false
+  use_X_in_em: [false, true]
 
 model:
-  soft_class_specific_slopes: false
-  soft_alt_iters: 10
-  soft_tol: 1e-8
+  ridge_alpha_oracle: 0.0
+  ridge_alpha_soft: 0.1
+  ridge_alpha_ignore: 0.0
 
 io:
   results_csv: "experiments/results/gmm_em_results.csv"
