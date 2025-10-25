@@ -26,3 +26,14 @@ def cross_entropy(tau: np.ndarray, z_true: np.ndarray, eps: float = 1e-12) -> fl
     probs = tau[np.arange(tau.shape[0]), idx]
     probs = np.clip(probs, eps, 1.0)
     return float(-np.mean(np.log(probs)))
+
+
+def z_feature_mse(z_est: np.ndarray, z_true: np.ndarray) -> float:
+    est = np.asarray(z_est, dtype=float)
+    truth = np.asarray(z_true, dtype=float)
+    if est.ndim == 1:
+        est = est.reshape(-1, 1)
+    if truth.ndim == 1:
+        truth = truth.reshape(-1, 1)
+    diff = est - truth
+    return float(np.mean(np.sum(diff**2, axis=1)))
