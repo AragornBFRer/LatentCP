@@ -11,14 +11,17 @@ import pandas as pd
 from .config import ExperimentConfig, RunConfig, iter_run_configs, load_config
 from .conformal import split_conformal
 from .data_gen import DatasetSplit, generate_data
-from .em_gmm import GMMParams, fit_gmm_em, gmm_responsibilities
-from .metrics import avg_length, coverage, cross_entropy, hard_accuracy, mean_max_tau
-from .predictors import EMHardPredictor, EMSoftPredictor, IgnoreZPredictor, OracleZPredictor
+from .em_gmm import fit_gmm_em, gmm_responsibilities
+from .metrics import avg_length, coverage, cross_entropy, mean_max_tau, z_feature_mse
+from .predictors import EMSoftPredictor, IgnoreZPredictor, OracleZPredictor
 from .utils import ensure_dir, rng_from_seed
 
 
 def _combo_seed(run_cfg: RunConfig) -> int:
-    payload = f"{run_cfg.seed}|{run_cfg.K}|{run_cfg.delta}|{run_cfg.beta_spread}|{int(run_cfg.use_x_in_em)}".encode()
+    payload = (
+        f"{run_cfg.seed}|{run_cfg.K}|{run_cfg.delta}|{run_cfg.rho}|{run_cfg.sigma_y}|"
+        f"{run_cfg.b_scale}|{int(run_cfg.use_x_in_em)}"
+    ).encode()
     digest = hashlib.sha256(payload).digest()
     return int.from_bytes(digest[:8], "little", signed=False)
 
@@ -32,7 +35,12 @@ def _build_em_features(split: DatasetSplit, use_x: bool) -> np.ndarray:
 def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     rng = rng_from_seed(_combo_seed(run_cfg))
     train, cal, test, true_params = generate_data(
-        cfg.dgp_cfg, run_cfg, cfg.global_cfg.n_train, cfg.global_cfg.n_cal, cfg.global_cfg.n_test, rng
+        cfg.dgp_cfg,
+        run_cfg,
+        cfg.global_cfg.n_train,
+        cfg.global_cfg.n_cal,
+        cfg.global_cfg.n_test,
+        rng,
     )
 
     K_fit = cfg.em_cfg.K_fit or run_cfg.K
@@ -55,32 +63,39 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     tau_cal = gmm_responsibilities(S_cal, em_params)
     tau_test = gmm_responsibilities(S_test, em_params)
 
-    zhat_train = tau_train.argmax(axis=1)
-    zhat_cal = tau_cal.argmax(axis=1)
-    zhat_test = tau_test.argmax(axis=1)
+    means_r_true = true_params["means_r"]
+    z_star_train = means_r_true[train.Z]
+    z_star_cal = means_r_true[cal.Z]
+    z_star_test = means_r_true[test.Z]
 
-    oracle = OracleZPredictor().fit(train.X, train.Y, Z_true=train.Z)
-    hard = EMHardPredictor().fit(train.X, train.Y, zhat=zhat_train)
-    soft = EMSoftPredictor(
-        alt_iters=cfg.model_cfg.soft_alt_iters,
-        tol=cfg.model_cfg.soft_tol,
-        class_specific_slopes=cfg.model_cfg.soft_class_specific_slopes,
-    ).fit(train.X, train.Y, tau=tau_train)
-    ignore = IgnoreZPredictor().fit(train.X, train.Y)
+    em_means = em_params.means
+    if run_cfg.use_x_in_em:
+        mu_hat_r = em_means[:, : cfg.dgp_cfg.d_R]
+    else:
+        mu_hat_r = em_means
+    z_soft_train = tau_train @ mu_hat_r
+    z_soft_cal = tau_cal @ mu_hat_r
+    z_soft_test = tau_test @ mu_hat_r
+
+    oracle = OracleZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_oracle).fit(
+        train.X, train.Y, z_star=z_star_train
+    )
+    soft = EMSoftPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_soft).fit(
+        train.X, train.Y, z_feat=z_soft_train
+    )
+    ignore = IgnoreZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_ignore).fit(train.X, train.Y)
 
     scores = {
-        "oracle": np.abs(cal.Y - oracle.predict_mean(cal.X, Z_true=cal.Z)),
-        "hard": np.abs(cal.Y - hard.predict_mean(cal.X, zhat=zhat_cal)),
-        "soft": np.abs(cal.Y - soft.predict_mean(cal.X, tau=tau_cal)),
+        "oracle": np.abs(cal.Y - oracle.predict_mean(cal.X, z_star=z_star_cal)),
+        "soft": np.abs(cal.Y - soft.predict_mean(cal.X, z_feat=z_soft_cal)),
         "ignore": np.abs(cal.Y - ignore.predict_mean(cal.X)),
     }
 
     qhat = {name: split_conformal(vals, cfg.global_cfg.alpha) for name, vals in scores.items()}
 
     preds_test = {
-        "oracle": oracle.predict_mean(test.X, Z_true=test.Z),
-        "hard": hard.predict_mean(test.X, zhat=zhat_test),
-        "soft": soft.predict_mean(test.X, tau=tau_test),
+        "oracle": oracle.predict_mean(test.X, z_star=z_star_test),
+        "soft": soft.predict_mean(test.X, z_feat=z_soft_test),
         "ignore": ignore.predict_mean(test.X),
     }
 
@@ -92,19 +107,20 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
         results[f"length_{name}"] = avg_length(q)
 
     results["len_gap_soft"] = results["length_soft"] - results["length_oracle"]
-    results["len_gap_hard"] = results["length_hard"] - results["length_oracle"]
     results["len_gap_ignore"] = results["length_ignore"] - results["length_oracle"]
 
-    results["acc_hard"] = hard_accuracy(zhat_test, test.Z)
     results["mean_max_tau"] = mean_max_tau(tau_test)
     results["cross_entropy"] = cross_entropy(tau_test, test.Z)
+    results["z_feature_mse"] = z_feature_mse(z_soft_test, z_star_test)
 
     results.update(
         {
             "seed": run_cfg.seed,
             "K": run_cfg.K,
             "delta": run_cfg.delta,
-            "beta_spread": run_cfg.beta_spread,
+            "rho": run_cfg.rho,
+            "sigma_y": run_cfg.sigma_y,
+            "b_scale": run_cfg.b_scale,
             "use_x_in_em": run_cfg.use_x_in_em,
             "em_converged": em_params.converged,
             "em_iter": em_params.n_iter,

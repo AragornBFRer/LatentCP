@@ -18,24 +18,15 @@ class DatasetSplit:
     Z: np.ndarray
 
 
-def _build_beta(K: int, spread: float) -> np.ndarray:
-    if spread == 0.0:
-        return np.zeros(K)
-    offsets = np.linspace(-(K - 1) / 2.0, (K - 1) / 2.0, K)
-    offsets -= offsets.mean()
-    return spread * offsets
-
-
-def _make_covariance(dgp: DGPConfig, use_full_S: bool) -> np.ndarray:
+def _make_covariance(dgp: DGPConfig, rho: float, use_full_S: bool) -> np.ndarray:
     d_r = dgp.d_R
     d_x = dgp.d_X
     sigma2 = dgp.sigma_s ** 2
     if use_full_S:
         cov_rr = sigma2 * np.eye(d_r)
         cov_xx = sigma2 * np.eye(d_x)
-        if dgp.cov_type_true == "full" and dgp.rho_rx != 0.0:
-            scale = dgp.rho_rx * sigma2
-            cov_rx = scale * np.eye(d_r, d_x)
+        if dgp.cov_type_true == "full" and rho != 0.0:
+            cov_rx = rho * sigma2 * np.eye(d_r, d_x)
         else:
             cov_rx = np.zeros((d_r, d_x))
         top = np.hstack([cov_rr, cov_rx])
@@ -67,10 +58,17 @@ def generate_data(
     means_r = simplex_vertices(K, d_r, run_cfg.delta, allow_smaller_dim=True)
 
     use_full_S = dgp_cfg.use_S.upper() == "RX"
+    means_x = np.zeros((K, d_x))
+    if dgp_cfg.mu_x_shift != 0.0 and d_x > 0:
+        shift = dgp_cfg.mu_x_shift * run_cfg.delta
+        base = np.zeros((K, d_x))
+        base[:, 0] = np.linspace(-(K - 1) / 2.0, (K - 1) / 2.0, K)
+        base -= base.mean(axis=0, keepdims=True)
+        means_x = shift * base
     if use_full_S:
         means_full = np.zeros((K, d_r + d_x))
         means_full[:, :d_r] = means_r
-        # keep X means at zero unless delta also controls them later
+        means_full[:, d_r:] = means_x
     else:
         means_full = None
 
@@ -81,7 +79,7 @@ def generate_data(
     X = np.empty((total, d_x))
 
     if use_full_S:
-        cov = _make_covariance(dgp_cfg, True)
+        cov = _make_covariance(dgp_cfg, run_cfg.rho, True)
         for k in range(K):
             mask = z == k
             n_k = int(mask.sum())
@@ -91,7 +89,7 @@ def generate_data(
             R[mask] = R_and_X[:, :d_r]
             X[mask] = R_and_X[:, d_r:]
     else:
-        cov_r = _make_covariance(dgp_cfg, False)
+        cov_r = _make_covariance(dgp_cfg, run_cfg.rho, False)
         for k in range(K):
             mask = z == k
             n_k = int(mask.sum())
@@ -102,12 +100,24 @@ def generate_data(
         X[:] = rng.normal(size=(total, d_x))
 
     theta = rng.normal(scale=1.0 / max(1, np.sqrt(d_x)), size=d_x)
-    beta = _build_beta(K, run_cfg.beta_spread)
-    noise = rng.normal(scale=dgp_cfg.sigma_y, size=total)
+    if d_r > 0:
+        b = rng.normal(scale=1.0 / max(1, np.sqrt(d_r)), size=d_r)
+        norm_b = np.linalg.norm(b)
+        if run_cfg.b_scale <= 0.0:
+            b = np.zeros_like(b)
+        elif norm_b > 0:
+            b = (run_cfg.b_scale / norm_b) * b
+        else:
+            b = np.zeros_like(b)
+        mu_r_lookup = means_r
+        cluster_contrib = mu_r_lookup[z] @ b
+    else:
+        b = np.zeros(0, dtype=float)
+        cluster_contrib = np.zeros(total)
 
-    linear = X @ theta
-    cluster_shift = beta[z]
-    Y = linear + cluster_shift + noise
+    noise = rng.normal(scale=run_cfg.sigma_y, size=total)
+    linear = X @ theta if d_x > 0 else np.zeros(total)
+    Y = linear + cluster_contrib + noise
 
     train_slice = slice(0, n_train)
     cal_slice = slice(n_train, n_train + n_cal)
@@ -120,8 +130,11 @@ def generate_data(
     info = {
         "pi": pi,
         "means_r": means_r,
+        "means_x": means_x,
         "theta": theta,
-        "beta": beta,
+        "b": b,
+        "sigma_y": run_cfg.sigma_y,
+        "rho": run_cfg.rho,
     }
     if means_full is not None:
         info["means_full"] = means_full
