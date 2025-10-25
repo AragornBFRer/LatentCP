@@ -1,16 +1,33 @@
-"""Regression models using oracle or EM-imputed cluster labels."""
+"""Regression models using oracle or EM-imputed cluster means."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
 
-from .utils import one_hot
-
 
 def _augment(X: np.ndarray) -> np.ndarray:
     n = X.shape[0]
     return np.hstack([np.ones((n, 1)), X])
+
+
+def _ensure_2d(arr: np.ndarray) -> np.ndarray:
+    out = np.asarray(arr, dtype=float)
+    if out.ndim == 1:
+        return out.reshape(-1, 1)
+    return out
+
+
+def _solve_linear(design: np.ndarray, target: np.ndarray, ridge_alpha: float) -> np.ndarray:
+    if ridge_alpha <= 0.0 or design.shape[1] <= 1:
+        sol, *_ = np.linalg.lstsq(design, target, rcond=None)
+        return sol
+    d = design.shape[1]
+    penalty = np.sqrt(ridge_alpha) * np.eye(d - 1)
+    aug_design = np.vstack([design, np.hstack([np.zeros((d - 1, 1)), penalty])])
+    aug_target = np.concatenate([target, np.zeros(d - 1)])
+    sol, *_ = np.linalg.lstsq(aug_design, aug_target, rcond=None)
+    return sol
 
 
 class Predictor:
@@ -25,144 +42,71 @@ class Predictor:
 
 
 class IgnoreZPredictor(Predictor):
-    def __init__(self) -> None:
-        self.theta: np.ndarray | None = None
+    def __init__(self, ridge_alpha: float = 0.0) -> None:
+        self.ridge_alpha = ridge_alpha
+        self.coef: np.ndarray | None = None
 
     def fit(self, X: np.ndarray, Y: np.ndarray, **kwargs) -> "IgnoreZPredictor":
         design = _augment(X)
-        sol, *_ = np.linalg.lstsq(design, Y, rcond=None)
-        self.theta = sol
+        self.coef = _solve_linear(design, Y, self.ridge_alpha)
         return self
 
     def predict_mean(self, X: np.ndarray, **kwargs) -> np.ndarray:
-        if self.theta is None:
+        if self.coef is None:
             raise RuntimeError("Model not fitted")
         design = _augment(X)
-        return design @ self.theta
+        return design @ self.coef
 
 
 class OracleZPredictor(Predictor):
-    def __init__(self) -> None:
+    def __init__(self, ridge_alpha: float = 0.0) -> None:
+        self.ridge_alpha = ridge_alpha
+        self.intercept: float | None = None
         self.theta: np.ndarray | None = None
-        self.beta: np.ndarray | None = None
+        self.b: np.ndarray | None = None
 
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, Z_true: np.ndarray, **kwargs) -> "OracleZPredictor":
-        Z = Z_true.astype(int)
-        K = int(Z.max()) + 1
-        design = _augment(X)
-        d = design.shape[1]
-        if K > 1:
-            dummies = one_hot(Z, K)[:, 1:]
-            design = np.hstack([design, dummies])
-        sol, *_ = np.linalg.lstsq(design, Y, rcond=None)
-        self.theta = sol[:d]
-        self.beta = np.zeros(K)
-        if K > 1:
-            self.beta[1:] = sol[d:]
+    def fit(self, X: np.ndarray, Y: np.ndarray, *, z_star: np.ndarray, **kwargs) -> "OracleZPredictor":
+        z_feat = _ensure_2d(z_star)
+        design = np.hstack([_augment(X), z_feat])
+        coef = _solve_linear(design, Y, self.ridge_alpha)
+        self.intercept = float(coef[0])
+        self.theta = coef[1 : 1 + X.shape[1]]
+        self.b = coef[1 + X.shape[1] :]
         return self
 
-    def predict_mean(self, X: np.ndarray, *, Z_true: np.ndarray, **kwargs) -> np.ndarray:
-        if self.theta is None or self.beta is None:
+    def predict_mean(self, X: np.ndarray, *, z_star: np.ndarray, **kwargs) -> np.ndarray:
+        if self.intercept is None or self.theta is None or self.b is None:
             raise RuntimeError("Model not fitted")
-        design = _augment(X)
-        base = design @ self.theta
-        adj = self.beta[Z_true.astype(int)]
-        return base + adj
-
-
-class EMHardPredictor(Predictor):
-    def __init__(self) -> None:
-        self.theta: np.ndarray | None = None
-        self.beta: np.ndarray | None = None
-
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, zhat: np.ndarray, **kwargs) -> "EMHardPredictor":
-        labels = zhat.astype(int)
-        K = int(labels.max()) + 1
-        design = _augment(X)
-        d = design.shape[1]
-        if K > 1:
-            dummies = one_hot(labels, K)[:, 1:]
-            design = np.hstack([design, dummies])
-        sol, *_ = np.linalg.lstsq(design, Y, rcond=None)
-        self.theta = sol[:d]
-        self.beta = np.zeros(K)
-        if K > 1:
-            self.beta[1:] = sol[d:]
-        return self
-
-    def predict_mean(self, X: np.ndarray, *, zhat: np.ndarray, **kwargs) -> np.ndarray:
-        if self.theta is None or self.beta is None:
-            raise RuntimeError("Model not fitted")
-        design = _augment(X)
-        base = design @ self.theta
-        adj = self.beta[zhat.astype(int)]
-        return base + adj
+        z_feat = _ensure_2d(z_star)
+        base = self.intercept + X @ self.theta if X.size else np.full(z_feat.shape[0], self.intercept)
+        return base + (z_feat @ self.b)
 
 
 @dataclass
 class SoftParams:
+    intercept: float
     theta: np.ndarray
-    beta: np.ndarray
-    theta_per_class: np.ndarray | None
+    b: np.ndarray
 
 
 class EMSoftPredictor(Predictor):
-    def __init__(self, *, alt_iters: int = 10, tol: float = 1e-8, class_specific_slopes: bool = False) -> None:
-        self.alt_iters = alt_iters
-        self.tol = tol
-        self.class_specific_slopes = class_specific_slopes
+    def __init__(self, ridge_alpha: float = 0.0) -> None:
+        self.ridge_alpha = ridge_alpha
         self.params: SoftParams | None = None
 
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, tau: np.ndarray, **kwargs) -> "EMSoftPredictor":
-        K = tau.shape[1]
-        design = _augment(X)
-        # initial solution ignoring Z
-        sol, *_ = np.linalg.lstsq(design, Y, rcond=None)
-        theta = sol
-        beta = np.zeros(K)
-        theta_k = None
-
-        weights = tau.sum(axis=1)
-        weights = np.clip(weights, 1e-8, None)
-        target = Y.copy()
-
-        for _ in range(self.alt_iters):
-            residual = target - design @ theta
-            denom = tau.sum(axis=0) + 1e-12
-            beta = (tau * residual[:, None]).sum(axis=0) / denom
-            beta -= np.average(beta, weights=denom)
-            target = Y - tau @ beta
-            W = np.sqrt(weights)[:, None]
-            lhs = W * design
-            rhs = target * np.sqrt(weights)
-            theta_new, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
-            if np.linalg.norm(theta_new - theta) <= self.tol * (1.0 + np.linalg.norm(theta)):
-                theta = theta_new
-                break
-            theta = theta_new
-
-        if self.class_specific_slopes:
-            theta_k = np.zeros((K, design.shape[1]))
-            for k in range(K):
-                w = np.sqrt(np.clip(tau[:, k], 0.0, None))
-                if w.sum() <= 1e-8:
-                    theta_k[k] = theta
-                    continue
-                lhs = design * w[:, None]
-                rhs = Y * w
-                sol_k, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
-                theta_k[k] = sol_k
-
-        self.params = SoftParams(theta=theta, beta=beta, theta_per_class=theta_k)
+    def fit(self, X: np.ndarray, Y: np.ndarray, *, z_feat: np.ndarray, **kwargs) -> "EMSoftPredictor":
+        z_feature = _ensure_2d(z_feat)
+        design = np.hstack([_augment(X), z_feature])
+        coef = _solve_linear(design, Y, self.ridge_alpha)
+        intercept = float(coef[0])
+        theta = coef[1 : 1 + X.shape[1]]
+        b = coef[1 + X.shape[1] :]
+        self.params = SoftParams(intercept=intercept, theta=theta, b=b)
         return self
 
-    def predict_mean(self, X: np.ndarray, *, tau: np.ndarray, **kwargs) -> np.ndarray:
+    def predict_mean(self, X: np.ndarray, *, z_feat: np.ndarray, **kwargs) -> np.ndarray:
         if self.params is None:
             raise RuntimeError("Model not fitted")
-        design = _augment(X)
-        if self.class_specific_slopes and self.params.theta_per_class is not None:
-            preds = design @ self.params.theta_per_class.T
-            return np.sum(tau * preds, axis=1)
-        base = design @ self.params.theta
-        adjust = tau @ self.params.beta
-        return base + adjust
+        z_feature = _ensure_2d(z_feat)
+        base = self.params.intercept + X @ self.params.theta if X.size else np.full(z_feature.shape[0], self.params.intercept)
+        return base + (z_feature @ self.params.b)
