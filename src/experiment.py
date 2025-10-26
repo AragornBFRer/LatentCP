@@ -133,16 +133,37 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
 
 def run_experiment(cfg_path: str) -> pd.DataFrame:
     cfg = load_config(cfg_path)
+    key_cols = ["seed", "K", "delta", "rho", "sigma_y", "b_scale", "use_x_in_em"]
     rows: List[Dict[str, float]] = []
+    valid_keys = set()
     for run_cfg in iter_run_configs(cfg):
         rows.append(_run_single(cfg, run_cfg))
+        valid_keys.add(
+            (
+                run_cfg.seed,
+                run_cfg.K,
+                run_cfg.delta,
+                run_cfg.rho,
+                run_cfg.sigma_y,
+                run_cfg.b_scale,
+                run_cfg.use_x_in_em,
+            )
+        )
 
     df = pd.DataFrame(rows)
+    df["__key"] = list(zip(*(df[col] for col in key_cols)))
+
     results_path = Path(cfg.io_cfg.results_csv)
     ensure_dir(results_path)
     if results_path.exists():
         prev = pd.read_csv(results_path)
+        prev["__key"] = list(zip(*(prev[col] for col in key_cols)))
         df = pd.concat([prev, df], ignore_index=True)
+
+    df = df[df["__key"].isin(valid_keys)].copy()
+    df.drop_duplicates(subset="__key", keep="last", inplace=True)
+    df.sort_values(key_cols, inplace=True)
+    df.drop(columns="__key", inplace=True)
     df.to_csv(results_path, index=False)
     df.attrs["results_path"] = str(results_path)
     return df

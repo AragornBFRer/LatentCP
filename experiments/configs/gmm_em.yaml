@@ -6,16 +6,16 @@ global:
   alpha: 0.1
 
 dgp:
-  K_list: [2]
+  K_list: [2, 3]
   d_R: 5
   d_X: 10
   use_S: "RX"
-  delta_list: [0.5, 1.0]
+  delta_list: [0.4, 0.8, 1.2]
   sigma_s: 1.0
   cov_type_true: "full"
-  rho_list: [0.0, 0.3]
-  sigma_y_list: [0.5, 1.0]
-  b_scale_list: [0.5, 1.0]
+  rho_list: [0.0, 0.3, 0.6]
+  sigma_y_list: [0.5, 1.0, 1.5]
+  b_scale_list: [0.4, 1.0, 1.6]
   mu_x_shift: 0.0
 
 em_fit:
