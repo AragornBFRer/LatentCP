@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, Iterable, List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -16,6 +16,11 @@ from .em_gmm import fit_gmm_em, gmm_responsibilities
 from .metrics import avg_length, coverage, cross_entropy, mean_max_tau, z_feature_mse
 from .predictors import EMSoftPredictor, IgnoreZPredictor, OracleZPredictor
 from .utils import ensure_dir, rng_from_seed
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm may be unavailable at runtime
+    tqdm = None
 
 
 def _combo_seed(run_cfg: RunConfig) -> int:
@@ -135,6 +140,11 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
 
     return results
 
+def _with_progress(seq: Iterable[RunConfig], total: int | None = None) -> Iterable[RunConfig]:
+    if tqdm is None:
+        return seq
+    return tqdm(seq, total=total, desc="Running trials", unit="trial")
+
 
 def run_experiment(
     cfg_path: str,
@@ -153,8 +163,9 @@ def run_experiment(
         cfg = replace(cfg, io_cfg=replace(cfg.io_cfg, results_csv=str(results_path_override)))
     key_cols = ["seed", "K", "delta", "rho", "sigma_y", "b_scale", "use_x_in_em"]
     rows: List[Dict[str, float]] = []
+    run_cfgs = list(iter_run_configs(cfg))
     valid_keys = set()
-    for run_cfg in iter_run_configs(cfg):
+    for run_cfg in _with_progress(run_cfgs, total=len(run_cfgs)):
         rows.append(_run_single(cfg, run_cfg))
         valid_keys.add(
             (
