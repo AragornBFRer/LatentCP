@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 import numpy as np
 import pandas as pd
@@ -135,8 +136,21 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     return results
 
 
-def run_experiment(cfg_path: str) -> pd.DataFrame:
+def run_experiment(
+    cfg_path: str,
+    *,
+    seeds: Sequence[int] | None = None,
+    results_path_override: str | Path | None = None,
+) -> pd.DataFrame:
     cfg = load_config(cfg_path)
+    if seeds is not None:
+        seed_list = [int(s) for s in seeds]
+        if not seed_list:
+            raise ValueError("Seed override must contain at least one value")
+        seed_list = list(dict.fromkeys(seed_list))
+        cfg = replace(cfg, global_cfg=replace(cfg.global_cfg, seeds=seed_list))
+    if results_path_override is not None:
+        cfg = replace(cfg, io_cfg=replace(cfg.io_cfg, results_csv=str(results_path_override)))
     key_cols = ["seed", "K", "delta", "rho", "sigma_y", "b_scale", "use_x_in_em"]
     rows: List[Dict[str, float]] = []
     valid_keys = set()
