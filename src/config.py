@@ -40,6 +40,7 @@ class EMConfig:
     max_iter: int
     tol: float
     init: str
+    n_init: int
     use_X_in_em: List[bool]
 
 
@@ -164,6 +165,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         max_iter=int(e_raw.get("max_iter", 200)),
         tol=float(e_raw.get("tol", 1e-5)),
         init=str(e_raw.get("init", "kmeans")),
+        n_init=int(e_raw.get("n_init", 1)),
         use_X_in_em=[bool(v) for v in _expand_range(e_raw.get("use_X_in_em", [False]))],
     )
 

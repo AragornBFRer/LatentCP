@@ -25,6 +25,7 @@ em_fit:
   max_iter: 200
   tol: 1e-5
   init: "kmeans"
+  n_init: 5
   use_X_in_em: [false, true]
 
 model:

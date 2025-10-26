@@ -56,6 +56,8 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
         tol=cfg.em_cfg.tol,
         reg_covar=cfg.em_cfg.reg_covar,
         init=cfg.em_cfg.init,
+        n_init=cfg.em_cfg.n_init,
+        r_dim=cfg.dgp_cfg.d_R,
         rng=rng,
     )
 
@@ -106,8 +108,10 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
         results[f"coverage_{name}"] = coverage(test.Y, mu, q)
         results[f"length_{name}"] = avg_length(q)
 
-    results["len_gap_soft"] = results["length_soft"] - results["length_oracle"]
-    results["len_gap_ignore"] = results["length_ignore"] - results["length_oracle"]
+    length_oracle = results["length_oracle"]
+    denom = length_oracle if length_oracle != 0 else 1e-12
+    results["len_ratio_soft"] = results["length_soft"] / denom
+    results["len_ratio_ignore"] = results["length_ignore"] / denom
 
     results["mean_max_tau"] = mean_max_tau(tau_test)
     results["cross_entropy"] = cross_entropy(tau_test, test.Z)
@@ -164,6 +168,9 @@ def run_experiment(cfg_path: str) -> pd.DataFrame:
     df.drop_duplicates(subset="__key", keep="last", inplace=True)
     df.sort_values(key_cols, inplace=True)
     df.drop(columns="__key", inplace=True)
+    for legacy_col in ["len_gap_soft", "len_gap_ignore"]:
+        if legacy_col in df.columns:
+            df.drop(columns=legacy_col, inplace=True)
     df.to_csv(results_path, index=False)
     df.attrs["results_path"] = str(results_path)
     return df

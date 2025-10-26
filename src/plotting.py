@@ -350,17 +350,17 @@ def _plot_scatter_relationships(df: pd.DataFrame, out_dir: Path) -> None:
         "alpha": 0.75,
     }
 
-    sns.scatterplot(data=tidy, x="mean_max_tau", y="len_gap_soft", ax=axes[0], **scatter_kwargs)
+    sns.scatterplot(data=tidy, x="mean_max_tau", y="len_ratio_soft", ax=axes[0], **scatter_kwargs)
     axes[0].set_xlabel("Mean max responsibility")
-    axes[0].set_ylabel("Soft length gap")
-    axes[0].axhline(0.0, color="#2c3e50", linestyle=":", linewidth=1)
-    axes[0].set_title("Length gap vs τ sharpness")
+    axes[0].set_ylabel("Soft/oracle length ratio")
+    axes[0].axhline(1.0, color="#2c3e50", linestyle=":", linewidth=1)
+    axes[0].set_title("Length ratio vs τ sharpness")
     axes[0].grid(True, linestyle=":", linewidth=0.6, alpha=0.7)
 
-    sns.scatterplot(data=tidy, x="z_feature_mse", y="len_gap_soft", ax=axes[1], **scatter_kwargs)
+    sns.scatterplot(data=tidy, x="z_feature_mse", y="len_ratio_soft", ax=axes[1], **scatter_kwargs)
     axes[1].set_xlabel("Z-feature MSE")
-    axes[1].axhline(0.0, color="#2c3e50", linestyle=":", linewidth=1)
-    axes[1].set_title("Length gap vs feature error")
+    axes[1].axhline(1.0, color="#2c3e50", linestyle=":", linewidth=1)
+    axes[1].set_title("Length ratio vs feature error")
     axes[1].grid(True, linestyle=":", linewidth=0.6, alpha=0.7)
 
     if axes[0].legend_:
@@ -373,17 +373,18 @@ def _plot_scatter_relationships(df: pd.DataFrame, out_dir: Path) -> None:
 
     fig.tight_layout()
     ensure_dir(out_dir)
-    fig.savefig(Path(out_dir) / "len_gap_diagnostics.png", dpi=300, bbox_inches="tight")
+    fig.savefig(Path(out_dir) / "len_ratio_diagnostics.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
-def _plot_len_gap_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
+def _plot_len_ratio_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
     grouped = list(df.groupby("use_x_in_em"))
     if not grouped:
         return
 
-    agg = df.groupby(["use_x_in_em", "delta", "rho"])["len_gap_soft"].mean()
-    max_abs = float(agg.abs().max()) if not agg.empty else 0.0
+    agg = df.groupby(["use_x_in_em", "delta", "rho"])["len_ratio_soft"].mean()
+    delta_from_one = (agg - 1.0).abs()
+    max_abs = float(delta_from_one.max()) if not delta_from_one.empty else 0.0
     vmax = max(max_abs, 1e-6)
 
     n_cols = len(grouped)
@@ -392,7 +393,7 @@ def _plot_len_gap_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
 
     for idx, (use, group) in enumerate(grouped):
         pivot = (
-            group.groupby(["delta", "rho"])["len_gap_soft"].mean()
+            group.groupby(["delta", "rho"])["len_ratio_soft"].mean()
             .sort_index()
             .unstack("rho")
             .sort_index(axis=1)
@@ -402,21 +403,21 @@ def _plot_len_gap_heatmap(df: pd.DataFrame, out_dir: Path) -> None:
             annot=True,
             fmt=".2f",
             cmap="coolwarm",
-            center=0.0,
-            vmin=-vmax,
-            vmax=vmax,
+            center=1.0,
+            vmin=1.0 - vmax,
+            vmax=1.0 + vmax,
             cbar=idx == n_cols - 1,
-            cbar_kws={"label": "Mean soft length gap"},
+            cbar_kws={"label": "Mean soft/oracle length ratio"},
             ax=axes[idx],
         )
-        axes[idx].set_title(f"Soft length gap\n{USE_LABEL[use]}")
+        axes[idx].set_title(f"Soft length ratio\n{USE_LABEL[use]}")
         axes[idx].set_xlabel("ρ")
         axes[idx].set_ylabel("δ")
 
-    fig.suptitle("Soft length gap vs separation (δ) and correlation (ρ)", fontsize=13, y=0.98)
+    fig.suptitle("Soft length ratio vs separation (δ) and correlation (ρ)", fontsize=13, y=0.98)
     fig.tight_layout(rect=[0, 0, 1, 0.94])
     ensure_dir(out_dir)
-    fig.savefig(Path(out_dir) / "len_gap_heatmap.png", dpi=300)
+    fig.savefig(Path(out_dir) / "len_ratio_heatmap.png", dpi=300)
     plt.close(fig)
 
 
@@ -451,10 +452,10 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
             x_candidates=["b_scale", "sigma_y", "delta"],
         ),
         MetricSpec(
-            "len_gap_",
-            "Length gap vs oracle",
-            "length_gap_vs_grid.png",
-            "Length gap across parameter grid",
+            "len_ratio_",
+            "Length / oracle length",
+            "length_ratio_vs_grid.png",
+            "Length ratio across parameter grid",
             label_map=VARIANT_LABELS,
             x_candidates=["b_scale", "sigma_y", "delta"],
         ),
@@ -464,9 +465,14 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
 
     for spec in metric_specs:
         tidy = _prepare_tidy(df, spec)
-        _plot_metric_grid(tidy, spec, output_dir, reference=reference if spec.source == "coverage_" else None)
+        ref_line = None
+        if spec.source == "coverage_":
+            ref_line = reference
+        elif spec.source == "len_ratio_":
+            ref_line = 1.0
+        _plot_metric_grid(tidy, spec, output_dir, reference=ref_line)
 
     _plot_imputation_metrics(df, output_dir)
     _plot_scatter_relationships(df, output_dir)
-    # _plot_len_gap_heatmap(df, output_dir)
+    # _plot_len_ratio_heatmap(df, output_dir)
     _plot_em_diagnostics(df, output_dir)
