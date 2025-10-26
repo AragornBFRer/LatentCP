@@ -6,7 +6,7 @@ global:
   alpha: 0.1
 
 dgp:
-  K_list: [2, 3]
+  K_list: [10] # [2, 3]
   d_R: 5
   d_X: 10
   use_S: "RX"
