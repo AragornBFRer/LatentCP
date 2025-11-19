@@ -59,6 +59,7 @@ class MetricSpec:
     label_map: Dict[str, str] | None = None
     scalar_label: str | None = None
     x_candidates: List[str] | None = None
+    variant_filter: List[str] | None = None
 
 
 def _melt_metrics(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
@@ -89,6 +90,8 @@ def _prepare_tidy(df: pd.DataFrame, spec: MetricSpec) -> pd.DataFrame:
         tidy["variant"] = spec.scalar_label
     else:
         tidy = _melt_metrics(df, spec.source)
+        if spec.variant_filter:
+            tidy = tidy[tidy["variant"].isin(spec.variant_filter)].copy()
         mapping = spec.label_map or VARIANT_LABELS
         tidy["variant"] = tidy["variant"].map(mapping).fillna(
             tidy["variant"].str.replace("_", " ").str.title()
@@ -414,6 +417,15 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
             "Length ratio across parameter grid",
             label_map=VARIANT_LABELS,
             x_candidates=["delta", "sigma_y", "b_scale"],
+        ),
+        MetricSpec(
+            "len_ratio_",
+            "Length / oracle length",
+            "length_ratio_vs_grid_pcp.png",
+            "PCP baseline length ratio across parameter grid",
+            label_map={"pcp_base": "PCP-base", "em_pcp": "EM-PCP"},
+            x_candidates=["delta", "sigma_y", "b_scale"],
+            variant_filter=["pcp_base", "em_pcp"],
         ),
     ]
 
