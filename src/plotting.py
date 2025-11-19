@@ -92,12 +92,19 @@ def _prepare_tidy(df: pd.DataFrame, spec: MetricSpec) -> pd.DataFrame:
         tidy = _melt_metrics(df, spec.source)
         if spec.variant_filter:
             tidy = tidy[tidy["variant"].isin(spec.variant_filter)].copy()
+        if "use_x_in_em" in tidy.columns:
+            tidy["use_label"] = tidy["use_x_in_em"].map(USE_ROW_LABEL)
+        else:
+            tidy["use_label"] = USE_ROW_LABEL.get(False, "EM-R (R-only responsibilities)")
+    if spec.variant_filter:
+        tidy.reset_index(drop=True, inplace=True)
         mapping = spec.label_map or VARIANT_LABELS
         tidy["variant"] = tidy["variant"].map(mapping).fillna(
             tidy["variant"].str.replace("_", " ").str.title()
         )
 
-    tidy["use_label"] = tidy["use_x_in_em"].map(USE_ROW_LABEL)
+    if "use_label" not in tidy.columns:
+        tidy["use_label"] = tidy.get("use_x_in_em", False).map(USE_ROW_LABEL)
     tidy["panel"] = tidy.apply(_panel_label, axis=1)
     if "b_scale" in tidy.columns:
         tidy["b_label"] = tidy["b_scale"].map(lambda v: f"||b||={v}")
@@ -433,6 +440,10 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
 
     for spec in metric_specs:
         tidy = _prepare_tidy(df, spec)
+        if spec.filename == "length_ratio_vs_grid_pcp.png":
+            tidy = tidy[tidy.get("use_x_in_em", False) == False]
+            tidy = tidy.copy()
+            tidy["use_label"] = USE_ROW_LABEL[False]
         ref_line = None
         if spec.source == "coverage_":
             ref_line = reference
