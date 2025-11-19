@@ -90,12 +90,17 @@ After the CSV is produced, call:
 python plot_results.py --config experiments/configs/gmm_em.yaml --results experiments/results/gmm_em_results.csv --out experiments/plots
 ```
 
-The plotter automatically discovers all columns in the CSV. When PCP-base or EM-PCP are enabled you will see extra curves (e.g., `coverage_pcp_base`, `coverage_em_pcp`, diagnostic histograms). Output figures live under `experiments/plots/` with names like:
+The plotter automatically discovers all columns in the CSV. When PCP-base or EM-PCP are enabled you will see extra curves (e.g., `coverage_pcp_base`, `coverage_em_pcp`, diagnostic histograms). Output figures land in `experiments/plots/`; use the table below as a cheat sheet:
 
-- `coverage_vs_delta.png`
-- `length_vs_delta.png`
-- `mean_max_tau_vs_grid.png`
-- `len_ratio_diagnostics.png`
+| Plot | Description |
+| --- | --- |
+| `coverage_vs_grid.png` | Coverage for every baseline vs. the sweep variable (δ by default). The dotted line is the target coverage `1 - α`. |
+| `length_ratio_vs_grid.png` | Interval length divided by the oracle’s length; smaller is better. Helpful for spotting which conformal baseline is most efficient. |
+| `length_ratio_vs_grid_pcp.png` | PCP-only comparison (EM-PCP vs. PCP-base) restricted to EM-R runs so you can see their gap without extra panels. |
+| `len_ratio_diagnostics.png` | Scatter diagnostics showing how soft conformal length ratios correlate with EM quality metrics (mean max τ and Z-feature MSE). |
+| `mean_max_tau_vs_grid.png` | Average sharpness of EM responsibilities. High values mean clusters are well separated. |
+| `z_feature_mse_vs_grid.png` | MSE between the EM-soft features and the oracle latent means. Lower values indicate better feature recovery. |
+| `em_iterations_hist.png` | Histogram of EM iteration counts, useful for spotting difficult configurations. |
 
 Set `SKIP_PLOTS=1` during the run and execute the plotting command separately once results are ready.
 
