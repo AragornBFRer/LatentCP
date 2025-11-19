@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Sequence
 import numpy as np
 import pandas as pd
 
-from .config import ExperimentConfig, RunConfig, iter_run_configs, load_config
+from .config import ExperimentConfig, PCPVariantOptions, RunConfig, iter_run_configs, load_config
 from .conformal import split_conformal
 from .data_gen import DatasetSplit, generate_data
 from .em_gmm import fit_gmm_em, gmm_responsibilities
@@ -17,6 +17,7 @@ from .metrics import avg_length, coverage, cross_entropy, mean_max_tau, z_featur
 from .predictors import EMSoftPredictor, IgnoreZPredictor, OracleZPredictor, XRZYPredictor
 from .utils import ensure_dir, rng_from_seed
 from .pcp import PCPConfig, train_pcp
+from .pcp_membership import MembershipPCPModel
 
 try:
     from tqdm.auto import tqdm
@@ -37,6 +38,81 @@ def _build_em_features(split: DatasetSplit, use_x: bool) -> np.ndarray:
     if use_x:
         return np.hstack([split.R, split.X])
     return split.R
+
+
+def _variant_to_pcp_config(variant: PCPVariantOptions) -> PCPConfig:
+    return PCPConfig(
+        n_thresholds=variant.n_thresholds,
+        logistic_cv_folds=variant.logistic_cv_folds,
+        max_clusters=variant.max_clusters,
+        cluster_r2_tol=variant.cluster_r2_tol,
+        factor_max_iter=variant.factor_max_iter,
+        factor_tol=variant.factor_tol,
+        precision_grid=variant.precision_grid,
+        precision_trials=variant.precision_trials,
+        clip_eps=variant.clip_eps,
+        proj_lr=variant.proj_lr,
+        proj_max_iter=variant.proj_max_iter,
+        proj_tol=variant.proj_tol,
+    )
+
+
+def _concat_features(X: np.ndarray, R: np.ndarray) -> np.ndarray:
+    X_arr = np.asarray(X, dtype=float)
+    R_arr = np.asarray(R, dtype=float)
+    if X_arr.ndim == 1:
+        X_arr = X_arr.reshape(-1, 1)
+    if R_arr.ndim == 1:
+        R_arr = R_arr.reshape(-1, 1)
+    parts = []
+    if X_arr.size:
+        parts.append(X_arr)
+    if R_arr.size:
+        parts.append(R_arr)
+    if not parts:
+        raise ValueError("At least one of X or R must provide features for PCP")
+    base_n = parts[0].shape[0]
+    for part in parts[1:]:
+        if part.shape[0] != base_n:
+            raise ValueError("Feature blocks must share the same number of samples")
+    return parts[0] if len(parts) == 1 else np.hstack(parts)
+
+
+def _stack_rxy(R: np.ndarray, X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+    R_arr = np.asarray(R, dtype=float)
+    X_arr = np.asarray(X, dtype=float)
+    Y_arr = np.asarray(Y, dtype=float)
+    if R_arr.ndim == 1:
+        R_arr = R_arr.reshape(-1, 1)
+    if X_arr.ndim == 1:
+        X_arr = X_arr.reshape(-1, 1)
+    Y_arr = Y_arr.reshape(-1, 1)
+    parts = []
+    if R_arr.size:
+        parts.append(R_arr)
+    if X_arr.size:
+        parts.append(X_arr)
+    parts.append(Y_arr)
+    base_n = parts[0].shape[0]
+    for part in parts[1:]:
+        if part.shape[0] != base_n:
+            raise ValueError("R, X, and Y must share the same number of samples")
+    return parts[0] if len(parts) == 1 else np.hstack(parts)
+
+
+def _smooth_memberships(pi: np.ndarray, smoothing: float) -> np.ndarray:
+    arr = np.asarray(pi, dtype=float)
+    if arr.ndim != 2:
+        raise ValueError("Membership matrix must be 2D")
+    if smoothing <= 0.0:
+        return arr
+    smoothing = min(max(float(smoothing), 0.0), 1.0 - 1e-9)
+    K = arr.shape[1]
+    uniform = 1.0 / K if K > 0 else 0.0
+    arr = (1.0 - smoothing) * arr + smoothing * uniform
+    row_sums = arr.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0.0] = 1.0
+    return arr / row_sums
 
 
 def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
@@ -112,14 +188,6 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     mu_cal_pcp = xrzy.predict_mean(cal.X, R=cal.R)
     mu_test_pcp = xrzy.predict_mean(test.X, R=test.R)
     scores_pcp = np.abs(cal.Y - mu_cal_pcp)
-    pcp_model = train_pcp(
-        cal.R,
-        scores_pcp,
-        alpha=cfg.global_cfg.alpha,
-        rng=rng,
-        config=PCPConfig(),
-    )
-    qhat_pcp = pcp_model.quantiles(test.R, rng)
 
     results = {}
     for name in preds_test:
@@ -133,13 +201,105 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     results["len_ratio_soft"] = results["length_soft"] / denom
     results["len_ratio_ignore"] = results["length_ignore"] / denom
 
-    results["coverage_pcp"] = coverage(test.Y, mu_test_pcp, qhat_pcp)
-    results["length_pcp"] = avg_length(qhat_pcp)
-    results["len_ratio_pcp"] = results["length_pcp"] / denom
-    results["pcp_frac_inf"] = float(np.mean(~np.isfinite(qhat_pcp)))
-    results["pcp_precision"] = float(pcp_model.precision)
-    results["pcp_clusters"] = float(pcp_model.n_clusters)
-    results["pcp_cluster_r2"] = float(pcp_model.cluster_r2)
+    # XRZY-specific PCP (R-only membership)
+    results["coverage_pcp"] = np.nan
+    results["length_pcp"] = np.nan
+    results["len_ratio_pcp"] = np.nan
+    results["pcp_frac_inf"] = np.nan
+    results["pcp_precision"] = np.nan
+    results["pcp_clusters"] = np.nan
+    results["pcp_cluster_r2"] = np.nan
+    qhat_pcp = np.full(test.Y.shape, np.nan)
+    if cfg.pcp_cfg.xrzy.enabled:
+        pcp_model = train_pcp(
+            cal.R,
+            scores_pcp,
+            alpha=cfg.global_cfg.alpha,
+            rng=rng,
+            config=_variant_to_pcp_config(cfg.pcp_cfg.xrzy),
+        )
+        qhat_pcp = pcp_model.quantiles(test.R, rng)
+        results["coverage_pcp"] = coverage(test.Y, mu_test_pcp, qhat_pcp)
+        results["length_pcp"] = avg_length(qhat_pcp)
+        results["len_ratio_pcp"] = results["length_pcp"] / denom
+        results["pcp_frac_inf"] = float(np.mean(~np.isfinite(qhat_pcp)))
+        results["pcp_precision"] = float(pcp_model.precision)
+        results["pcp_clusters"] = float(pcp_model.n_clusters)
+        results["pcp_cluster_r2"] = float(pcp_model.cluster_r2)
+
+    # PCP-base using (X, R) features
+    results["coverage_pcp_base"] = np.nan
+    results["length_pcp_base"] = np.nan
+    results["len_ratio_pcp_base"] = np.nan
+    results["pcp_base_frac_inf"] = np.nan
+    results["pcp_base_precision"] = np.nan
+    results["pcp_base_clusters"] = np.nan
+    results["pcp_base_cluster_r2"] = np.nan
+    if cfg.pcp_cfg.base.enabled:
+        base_features_cal = _concat_features(cal.X, cal.R)
+        base_features_test = _concat_features(test.X, test.R)
+        pcp_base_model = train_pcp(
+            base_features_cal,
+            scores_pcp,
+            alpha=cfg.global_cfg.alpha,
+            rng=rng,
+            config=_variant_to_pcp_config(cfg.pcp_cfg.base),
+        )
+        qhat_pcp_base = pcp_base_model.quantiles(base_features_test, rng)
+        results["coverage_pcp_base"] = coverage(test.Y, mu_test_pcp, qhat_pcp_base)
+        results["length_pcp_base"] = avg_length(qhat_pcp_base)
+        results["len_ratio_pcp_base"] = results["length_pcp_base"] / denom
+        results["pcp_base_frac_inf"] = float(np.mean(~np.isfinite(qhat_pcp_base)))
+        results["pcp_base_precision"] = float(pcp_base_model.precision)
+        results["pcp_base_clusters"] = float(pcp_base_model.n_clusters)
+        results["pcp_base_cluster_r2"] = float(pcp_base_model.cluster_r2)
+
+    # EM-PCP using joint GMM over (R, X, Y)
+    results["coverage_em_pcp"] = np.nan
+    results["length_em_pcp"] = np.nan
+    results["len_ratio_em_pcp"] = np.nan
+    results["em_pcp_frac_inf"] = np.nan
+    results["em_pcp_precision"] = np.nan
+    results["em_pcp_clusters"] = np.nan
+    results["em_pcp_cluster_r2"] = np.nan
+    if cfg.pcp_cfg.em.enabled:
+        joint_train = _stack_rxy(train.R, train.X, train.Y)
+        joint_params = fit_gmm_em(
+            joint_train,
+            cfg.em_cfg.K_fit or run_cfg.K,
+            cov_type=cfg.em_cfg.cov_type_fit,
+            max_iter=cfg.em_cfg.max_iter,
+            tol=cfg.em_cfg.tol,
+            reg_covar=cfg.em_cfg.reg_covar,
+            init=cfg.em_cfg.init,
+            n_init=cfg.em_cfg.n_init,
+            r_dim=cfg.dgp_cfg.d_R + cfg.dgp_cfg.d_X,
+            rng=rng,
+        )
+        joint_cal = _stack_rxy(cal.R, cal.X, cal.Y)
+        pi_cal_em = gmm_responsibilities(joint_cal, joint_params)
+        joint_test = _stack_rxy(test.R, test.X, mu_test_pcp)
+        pi_test_em = gmm_responsibilities(joint_test, joint_params)
+        smoothing = getattr(cfg.pcp_cfg.em, "membership_smoothing", 0.0)
+        if smoothing > 0.0:
+            pi_cal_em = _smooth_memberships(pi_cal_em, smoothing)
+            pi_test_em = _smooth_memberships(pi_test_em, smoothing)
+        membership_cfg = _variant_to_pcp_config(cfg.pcp_cfg.em)
+        em_model = MembershipPCPModel.fit(
+            pi_cal_em,
+            scores_pcp,
+            alpha=cfg.global_cfg.alpha,
+            rng=rng,
+            config=membership_cfg,
+        )
+        qhat_em = em_model.quantiles(pi_test_em, rng)
+        results["coverage_em_pcp"] = coverage(test.Y, mu_test_pcp, qhat_em)
+        results["length_em_pcp"] = avg_length(qhat_em)
+        results["len_ratio_em_pcp"] = results["length_em_pcp"] / denom
+        results["em_pcp_frac_inf"] = float(np.mean(~np.isfinite(qhat_em)))
+        results["em_pcp_precision"] = float(em_model.precision)
+        results["em_pcp_clusters"] = float(pi_cal_em.shape[1])
+        results["em_pcp_cluster_r2"] = np.nan
 
     results["mean_max_tau"] = mean_max_tau(tau_test)
     results["cross_entropy"] = cross_entropy(tau_test, test.Z)

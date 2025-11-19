@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional
+from typing import Iterable, Iterator, List, Optional, Tuple
 
 import yaml
 
@@ -65,6 +65,7 @@ class ExperimentConfig:
     em_cfg: EMConfig
     model_cfg: ModelConfig
     io_cfg: IOConfig
+    pcp_cfg: "PCPFamilyConfig"
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,31 @@ class RunConfig:
     sigma_y: float
     b_scale: float
     use_x_in_em: bool
+
+
+@dataclass(frozen=True)
+class PCPVariantOptions:
+    enabled: bool
+    n_thresholds: int
+    logistic_cv_folds: int
+    max_clusters: int
+    cluster_r2_tol: float
+    factor_max_iter: int
+    factor_tol: float
+    precision_grid: Tuple[int, ...]
+    precision_trials: int
+    clip_eps: float
+    proj_lr: float
+    proj_max_iter: int
+    proj_tol: float
+    membership_smoothing: float
+
+
+@dataclass(frozen=True)
+class PCPFamilyConfig:
+    xrzy: PCPVariantOptions
+    base: PCPVariantOptions
+    em: PCPVariantOptions
 
 
 def _expand_range(value) -> List:
@@ -118,6 +144,35 @@ def _expand_range(value) -> List:
     return [value]
 
 
+def _parse_precision_grid(raw_grid, default: Tuple[int, ...]) -> Tuple[int, ...]:
+    if raw_grid is None:
+        return default
+    if isinstance(raw_grid, (list, tuple)):
+        return tuple(int(v) for v in raw_grid)
+    return tuple([int(raw_grid)])
+
+
+def _parse_pcp_variant(raw: dict | None, *, enabled_default: bool) -> PCPVariantOptions:
+    section = raw or {}
+    precision_default = (20, 50, 100, 200, 500)
+    return PCPVariantOptions(
+        enabled=bool(section.get("enabled", enabled_default)),
+        n_thresholds=int(section.get("n_thresholds", 9)),
+        logistic_cv_folds=int(section.get("logistic_cv_folds", 5)),
+        max_clusters=int(section.get("max_clusters", 15)),
+        cluster_r2_tol=float(section.get("cluster_r2_tol", 0.05)),
+        factor_max_iter=int(section.get("factor_max_iter", 400)),
+        factor_tol=float(section.get("factor_tol", 1e-4)),
+        precision_grid=_parse_precision_grid(section.get("precision_grid"), precision_default),
+        precision_trials=int(section.get("precision_trials", 64)),
+        clip_eps=float(section.get("clip_eps", 1e-8)),
+        proj_lr=float(section.get("proj_lr", 0.2)),
+        proj_max_iter=int(section.get("proj_max_iter", 200)),
+        proj_tol=float(section.get("proj_tol", 1e-6)),
+        membership_smoothing=float(section.get("membership_smoothing", 0.0)),
+    )
+
+
 def load_config(path: str | Path) -> ExperimentConfig:
     raw = yaml.safe_load(Path(path).read_text())
 
@@ -126,6 +181,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
     e_raw = raw.get("em_fit", {})
     m_raw = raw.get("model", {})
     io_raw = raw.get("io", {})
+    p_raw = raw.get("pcp", {})
 
     global_cfg = GlobalConfig(
         seeds=_expand_range(g_raw.get("seeds", [1])),
@@ -187,7 +243,13 @@ def load_config(path: str | Path) -> ExperimentConfig:
         artifacts_dir=str(io_raw.get("artifacts_dir", "experiments/artifacts")),
     )
 
-    return ExperimentConfig(global_cfg, dgp_cfg, em_cfg, model_cfg, io_cfg)
+    pcp_cfg = PCPFamilyConfig(
+        xrzy=_parse_pcp_variant(p_raw.get("xrzy"), enabled_default=True),
+        base=_parse_pcp_variant(p_raw.get("base"), enabled_default=False),
+        em=_parse_pcp_variant(p_raw.get("em"), enabled_default=False),
+    )
+
+    return ExperimentConfig(global_cfg, dgp_cfg, em_cfg, model_cfg, io_cfg, pcp_cfg)
 
 
 def iter_run_configs(cfg: ExperimentConfig) -> Iterator[RunConfig]:

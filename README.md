@@ -1,29 +1,109 @@
 Default configs live in `experiments/configs/gmm_em.yaml`.
 
-## Running
+---
+
+## 1. Run the XRZY baselines
+
+### One-click runner (Linux/macOS)
 
 ```bash
-# Linux / macOS
 chmod +x run.sh
-./run.sh
-
-# running 100 trials
-bash run.sh experiments/configs/gmm_em.yaml 100 experiments/plots experiments/results/gmm_em_results.csv
-
-# Windows PowerShell
-python main.py --config experiments/configs/gmm_em.yaml
+# args: <config> <num_trials> <plots_dir> <results_csv>
+./run.sh experiments/configs/gmm_em.yaml 50 experiments/plots experiments/results/gmm_em_results.csv
 ```
 
-## Visualizing results
+Environment knobs for HPC machines:
 
-After simulations finish, generate summary figures:
+- `RESULTS_PATH` (4th arg) lets you stream runs into a single CSV.
+- `OMP_NUM_THREADS` / `MKL_NUM_THREADS` default to `1` inside `run.sh` to avoid MKL/KMeans issues on shared nodes—you can override before invoking the script.
+- Set `SKIP_PLOTS=1 ./run.sh ...` if you only want the CSV (plots can be heavy on headless clusters).
+
+### Windows PowerShell
+
+```powershell
+python main.py --config experiments/configs/gmm_em.yaml --trials 50
+```
+
+Arguments mirror the CLI in `main.py`:
+
+- `--config`: path to a YAML experiment spec.
+- `--trials`: overrides the set of seeds defined in the YAML (`1..trials`).
+- `--results`: optional destination CSV (defaults to `io.results_csv`).
+
+---
+
+## 2. Choose which baselines to compare
+
+The YAML file now contains a `pcp` section controlling each posterior-conformal variant:
+
+```yaml
+pcp:
+	xrzy:
+		enabled: true   # responsibilities based on R only (current default)
+	base:
+		enabled: true   # residual-driven PCP on (X,R)
+	em:
+		enabled: false  # EM-PCP using joint memberships over (X,R,Y)
+```
+
+Flip any `enabled` flag to `false` to skip that baseline. Every sub-block also inherits the tunable hyperparameters defined in `src/config.py`:
+
+| Field | Meaning |
+| --- | --- |
+| `n_thresholds` | Number of residual quantile levels per PCP variant |
+| `max_clusters` / `cluster_r2_tol` | Factorization rank + R² tolerance for template selection |
+| `precision_grid` / `precision_trials` | Grid-search candidates for the multinomial precision `m` |
+| `clip_eps`, `proj_lr`, `proj_max_iter`, `proj_tol` | Numerical safeguards for simplex projection |
+
+Per-variant overrides look like:
+
+```yaml
+pcp:
+	base:
+		enabled: true
+		n_thresholds: 15
+		precision_grid: [20, 40, 80]
+```
+
+Other key YAML knobs:
+
+- `global`: seeds, split sizes, target `alpha`.
+- `dgp`: latent structure (`K_list`, `delta_list`, `rho_list`, `sigma_y_list`, `b_scale_list`).
+- `em_fit`: how to fit responsibilities (`use_X_in_em`, covariance model, iterations).
+- `model`: ridge penalties for oracle/soft/ignore/XRZY regressors.
+
+Run a subset of baselines by pairing CLI overrides with YAML edits. Example: EM-PCP only.
 
 ```bash
-# Linux / macOS
-python plot_results.py --config experiments/configs/gmm_em.yaml
-
-# Windows PowerShell
-python plot_results.py --config experiments/configs/gmm_em.yaml
+python main.py --config experiments/configs/gmm_em.yaml --results experiments/results/em_pcp_only.csv
 ```
 
-Figures are stored under `experiments/plots/` with descriptive filenames such as `coverage_vs_delta.png`, `length_vs_delta.png`, and `imputation_metrics_vs_delta.png`.
+With `pcp.xrzy.enabled=false`, `pcp.base.enabled=false`, `pcp.em.enabled=true` inside the YAML.
+
+---
+
+## 3. Visualize metrics
+
+After the CSV is produced, call:
+
+```bash
+python plot_results.py --config experiments/configs/gmm_em.yaml --results experiments/results/gmm_em_results.csv --out experiments/plots
+```
+
+The plotter automatically discovers all columns in the CSV. When PCP-base or EM-PCP are enabled you will see extra curves (e.g., `coverage_pcp_base`, `coverage_em_pcp`, diagnostic histograms). Output figures live under `experiments/plots/` with names like:
+
+- `coverage_vs_delta.png`
+- `length_vs_delta.png`
+- `mean_max_tau_vs_grid.png`
+- `len_ratio_diagnostics.png`
+
+Set `SKIP_PLOTS=1` during the run and execute the plotting command separately once results are ready.
+
+---
+
+## 4. Quick troubleshooting & tips
+
+- Want shorter debug cycles? Shrink `global.n_train`, `n_cal`, `n_test`, and limit `dgp` lists to a single value.
+- The EM step can be expensive for EM-PCP; lower `em_fit.max_iter` / `n_init` during experimentation.
+- Large `precision_grid` entries increase PCP runtime. Start with `[20, 50, 100]` before scaling up.
+- Reuse previous CSVs by pointing `--results` to the same path; the runner will deduplicate by key `(seed, K, delta, rho, sigma_y, b_scale, use_x_in_em)`.
