@@ -184,7 +184,13 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
         "ignore": ignore.predict_mean(test.X),
     }
 
-    xrzy = XRZYPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_xrzy).fit(train.X, train.Y, R=train.R)
+    xrzy = XRZYPredictor(
+        n_estimators=cfg.model_cfg.pcp_rf_n_estimators,
+        max_depth=cfg.model_cfg.pcp_rf_max_depth,
+        min_samples_leaf=cfg.model_cfg.pcp_rf_min_samples_leaf,
+        n_jobs=cfg.model_cfg.pcp_rf_n_jobs,
+        random_state=int(rng.integers(0, 2**32 - 1)),
+    ).fit(train.X, train.Y, R=train.R)
     mu_cal_pcp = xrzy.predict_mean(cal.X, R=cal.R)
     mu_test_pcp = xrzy.predict_mean(test.X, R=test.R)
     scores_pcp = np.abs(cal.Y - mu_cal_pcp)

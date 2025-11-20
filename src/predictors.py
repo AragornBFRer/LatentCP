@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from sklearn.ensemble import RandomForestRegressor
 
 
 def _augment(X: np.ndarray) -> np.ndarray:
@@ -115,9 +116,24 @@ class EMSoftPredictor(Predictor):
 
 
 class XRZYPredictor(Predictor):
-    def __init__(self, ridge_alpha: float = 0.0) -> None:
-        self.ridge_alpha = ridge_alpha
-        self.coef: np.ndarray | None = None
+    def __init__(
+        self,
+        *,
+        n_estimators: int = 200,
+        max_depth: int | None = None,
+        min_samples_leaf: int = 5,
+        n_jobs: int = -1,
+        random_state: int | None = None,
+    ) -> None:
+        self.model = RandomForestRegressor(
+            n_estimators=n_estimators,
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            n_jobs=n_jobs,
+            random_state=random_state,
+        )
+        self._d_x: int | None = None
+        self._d_r: int | None = None
 
     def fit(self, X: np.ndarray, Y: np.ndarray, *, R: np.ndarray, **kwargs) -> "XRZYPredictor":
         X_arr = np.asarray(X, dtype=float)
@@ -128,14 +144,14 @@ class XRZYPredictor(Predictor):
             R_arr = R_arr.reshape(-1, 1)
         if X_arr.shape[0] != R_arr.shape[0]:
             raise ValueError("X and R must have matching sample counts")
-        design = _augment(np.hstack([X_arr, R_arr]))
-        self.coef = _solve_linear(design, Y, self.ridge_alpha)
+        design = np.hstack([X_arr, R_arr]) if X_arr.size and R_arr.size else (X_arr if X_arr.size else R_arr)
+        self.model.fit(design, np.asarray(Y, dtype=float).ravel())
         self._d_x = X_arr.shape[1]
         self._d_r = R_arr.shape[1]
         return self
 
     def predict_mean(self, X: np.ndarray, *, R: np.ndarray, **kwargs) -> np.ndarray:
-        if self.coef is None:
+        if self._d_x is None or self._d_r is None:
             raise RuntimeError("Model not fitted")
         X_arr = np.asarray(X, dtype=float)
         R_arr = np.asarray(R, dtype=float)
@@ -145,7 +161,7 @@ class XRZYPredictor(Predictor):
             R_arr = R_arr.reshape(-1, 1)
         if X_arr.shape[0] != R_arr.shape[0]:
             raise ValueError("X and R must have matching sample counts")
-        if X_arr.shape[1] != getattr(self, "_d_x", X_arr.shape[1]) or R_arr.shape[1] != getattr(self, "_d_r", R_arr.shape[1]):
+        if X_arr.shape[1] != self._d_x or R_arr.shape[1] != self._d_r:
             raise ValueError("Input feature dimensions differ from those seen during fitting")
-        design = _augment(np.hstack([X_arr, R_arr]))
-        return design @ self.coef
+        design = np.hstack([X_arr, R_arr]) if X_arr.size and R_arr.size else (X_arr if X_arr.size else R_arr)
+        return self.model.predict(design)
