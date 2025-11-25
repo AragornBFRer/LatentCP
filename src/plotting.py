@@ -82,7 +82,16 @@ def _melt_metrics(df: pd.DataFrame, prefix: str) -> pd.DataFrame:
 
 
 def _panel_label(row: pd.Series) -> str:
-    return f"K={int(row['K'])}, ρ={row['rho']}, σ={row['sigma_y']}"
+    parts = [f"K={int(row['K'])}"]
+    if "rho" in row.index:
+        parts.append(f"ρ={row['rho']}")
+    if "sigma_y" in row.index:
+        parts.append(f"σ={row['sigma_y']}")
+    if "b_scale" in row.index:
+        parts.append(f"||b||={row['b_scale']}")
+    if "delta" in row.index and "delta_label" not in row.index:
+        parts.append(f"δ={row['delta']}")
+    return ", ".join(parts)
 
 
 def _prepare_tidy(df: pd.DataFrame, spec: MetricSpec) -> pd.DataFrame:
@@ -118,7 +127,11 @@ def _prepare_tidy(df: pd.DataFrame, spec: MetricSpec) -> pd.DataFrame:
         tidy["delta_label"] = tidy["delta"].map(lambda v: f"δ={v}")
     if "rho" in tidy.columns:
         tidy["rho_label"] = tidy["rho"].map(lambda v: f"ρ={v}")
-    sort_cols = [col for col in ["panel", "use_label", "variant", "sigma_y", "b_scale", "delta"] if col in tidy.columns]
+    sort_cols = [
+        col
+        for col in ["panel", "use_label", "variant", "sigma_y", "b_scale", "delta"]
+        if col in tidy.columns
+    ]
     if sort_cols:
         tidy.sort_values(sort_cols, inplace=True)
     return tidy
@@ -332,7 +345,7 @@ def _plot_imputation_metrics(df: pd.DataFrame, out_dir: Path) -> None:
             "mean_max_tau_vs_grid.png",
             "Mean max responsibility across grid",
             scalar_label=IMPUTATION_LABELS["mean_max_tau"],
-            x_candidates=["delta", "sigma_y", "b_scale"],
+            x_candidates=["delta"],
         ),
         MetricSpec(
             "z_feature_mse",
@@ -340,7 +353,7 @@ def _plot_imputation_metrics(df: pd.DataFrame, out_dir: Path) -> None:
             "z_feature_mse_vs_grid.png",
             "Z-feature MSE across grid",
             scalar_label=IMPUTATION_LABELS["z_feature_mse"],
-            x_candidates=["delta", "sigma_y", "b_scale"],
+            x_candidates=["delta"],
         ),
     ]
 
@@ -377,7 +390,7 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
             "coverage_vs_grid.png",
             "Coverage across parameter grid",
             label_map=VARIANT_LABELS,
-            x_candidates=["delta", "sigma_y", "b_scale"],
+            x_candidates=["delta"],
         ),
         MetricSpec(
             "length_",
@@ -385,7 +398,7 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
             "length_vs_grid.png",
             "Interval length across parameter grid",
             label_map=VARIANT_LABELS,
-            x_candidates=["delta", "sigma_y", "b_scale"],
+            x_candidates=["delta"],
         ),
         MetricSpec(
             "length_",
@@ -393,7 +406,7 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
             "length_vs_grid_pcp.png",
             "PCP baseline interval length across parameter grid",
             label_map={"pcp_base": "PCP-base", "em_pcp": "EM-PCP"},
-            x_candidates=["delta", "sigma_y", "b_scale"],
+            x_candidates=["delta"],
             variant_filter=["pcp_base", "em_pcp"],
         ),
     ]

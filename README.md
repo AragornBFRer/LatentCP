@@ -98,7 +98,7 @@ pcp:
 Other key YAML knobs:
 
 - `global`: seeds, split sizes, target `alpha`.
-- `dgp`: latent structure (`K_list`, `delta_list`, `rho_list`, `sigma_y_list`, `b_scale_list`).
+- `dgp`: latent structure (`K_list`, `delta_list`, `alpha`, `sigma`, `mu_r`, `eta0`, `eta`).
 - `em_fit`: how to fit responsibilities (`use_X_in_em`, covariance model, iterations).
 - `model`: ridge penalty for the linear regressors (shared by ignore and joint predictors).
 
@@ -156,4 +156,4 @@ Set `SKIP_PLOTS=1` during the run and execute the plotting command separately on
 - Want shorter debug cycles? Shrink `global.n_train`, `n_cal`, `n_test`, and limit `dgp` lists to a single value.
 - The EM step can be expensive for EM-PCP; lower `em_fit.max_iter` / `n_init` during experimentation.
 - Large `precision_grid` entries increase PCP runtime. Start with `[20, 50, 100]` before scaling up.
-- Reuse previous CSVs by pointing `--results` to the same path; the runner will deduplicate by key `(seed, K, delta, rho, sigma_y, b_scale, use_x_in_em)`.
+- Reuse previous CSVs by pointing `--results` to the same path; the runner will deduplicate by key `(seed, K, delta, use_x_in_em)`.

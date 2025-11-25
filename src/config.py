@@ -22,14 +22,7 @@ class DGPConfig:
     K_list: List[int]
     d_R: int
     d_X: int
-    use_S: str
     delta_list: List[float]
-    sigma_s: float
-    cov_type_true: str
-    rho_list: List[float]
-    sigma_y_list: List[float]
-    b_scale_list: List[float]
-    mu_x_shift: float
     alpha: List[float]
     sigma: List[float]
     mu_r: List[List[float]]
@@ -75,9 +68,6 @@ class RunConfig:
     seed: int
     K: int
     delta: float
-    rho: float
-    sigma_y: float
-    b_scale: float
     use_x_in_em: bool
 
 
@@ -249,16 +239,6 @@ def load_config(path: str | Path) -> ExperimentConfig:
         alpha=float(g_raw.get("alpha", 0.1)),
     )
 
-    rho_source = d_raw.get("rho_list")
-    if rho_source is None:
-        rho_source = d_raw.get("rho_rx", [0.0])
-    sigma_y_source = d_raw.get("sigma_y_list")
-    if sigma_y_source is None:
-        sigma_y_source = d_raw.get("sigma_y", [1.0])
-    b_scale_source = d_raw.get("b_scale_list")
-    if b_scale_source is None:
-        b_scale_source = d_raw.get("beta_spread_list", [1.0])
-
     K_list = _expand_range(d_raw.get("K_list", [2]))
     if not K_list:
         raise ValueError("dgp.K_list must contain at least one value")
@@ -307,14 +287,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         K_list=K_list,
         d_R=d_R,
         d_X=d_X,
-        use_S=str(d_raw.get("use_S", "R")),
         delta_list=_expand_range(d_raw.get("delta_list", [1.0])),
-        sigma_s=float(d_raw.get("sigma_s", 1.0)),
-        cov_type_true=str(d_raw.get("cov_type_true", "full")),
-        rho_list=_expand_range(rho_source),
-        sigma_y_list=_expand_range(sigma_y_source),
-        b_scale_list=_expand_range(b_scale_source),
-        mu_x_shift=float(d_raw.get("mu_x_shift", 0.0)),
         alpha=alpha_vals,
         sigma=sigma_vals,
         mu_r=mu_r_vals,
@@ -354,16 +327,10 @@ def iter_run_configs(cfg: ExperimentConfig) -> Iterator[RunConfig]:
     for seed in cfg.global_cfg.seeds:
         for K in cfg.dgp_cfg.K_list:
             for delta in cfg.dgp_cfg.delta_list:
-                for rho in cfg.dgp_cfg.rho_list:
-                    for sigma_y in cfg.dgp_cfg.sigma_y_list:
-                        for b_scale in cfg.dgp_cfg.b_scale_list:
-                            for use_x in cfg.em_cfg.use_X_in_em:
-                                yield RunConfig(
-                                    seed=int(seed),
-                                    K=int(K),
-                                    delta=float(delta),
-                                    rho=float(rho),
-                                    sigma_y=float(sigma_y),
-                                    b_scale=float(b_scale),
-                                    use_x_in_em=bool(use_x),
-                                )
+                for use_x in cfg.em_cfg.use_X_in_em:
+                    yield RunConfig(
+                        seed=int(seed),
+                        K=int(K),
+                        delta=float(delta),
+                        use_x_in_em=bool(use_x),
+                    )

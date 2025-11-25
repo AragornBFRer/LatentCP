@@ -27,8 +27,7 @@ except ImportError:  # pragma: no cover - tqdm may be unavailable at runtime
 
 def _combo_seed(run_cfg: RunConfig) -> int:
     payload = (
-        f"{run_cfg.seed}|{run_cfg.K}|{run_cfg.delta}|{run_cfg.rho}|{run_cfg.sigma_y}|"
-        f"{run_cfg.b_scale}|{int(run_cfg.use_x_in_em)}"
+        f"{run_cfg.seed}|{run_cfg.K}|{run_cfg.delta}|{int(run_cfg.use_x_in_em)}"
     ).encode()
     digest = hashlib.sha256(payload).digest()
     return int.from_bytes(digest[:8], "little", signed=False)
@@ -203,9 +202,6 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
             "seed": run_cfg.seed,
             "K": run_cfg.K,
             "delta": run_cfg.delta,
-            "rho": run_cfg.rho,
-            "sigma_y": run_cfg.sigma_y,
-            "b_scale": run_cfg.b_scale,
             "use_x_in_em": run_cfg.use_x_in_em,
             "em_converged": em_params.converged,
             "em_iter": em_params.n_iter,
@@ -236,7 +232,7 @@ def run_experiment(
         cfg = replace(cfg, global_cfg=replace(cfg.global_cfg, seeds=seed_list))
     if results_path_override is not None:
         cfg = replace(cfg, io_cfg=replace(cfg.io_cfg, results_csv=str(results_path_override)))
-    key_cols = ["seed", "K", "delta", "rho", "sigma_y", "b_scale", "use_x_in_em"]
+    key_cols = ["seed", "K", "delta", "use_x_in_em"]
     rows: List[Dict[str, float]] = []
     run_cfgs = list(iter_run_configs(cfg))
     valid_keys = set()
@@ -247,9 +243,6 @@ def run_experiment(
                 run_cfg.seed,
                 run_cfg.K,
                 run_cfg.delta,
-                run_cfg.rho,
-                run_cfg.sigma_y,
-                run_cfg.b_scale,
                 run_cfg.use_x_in_em,
             )
         )
