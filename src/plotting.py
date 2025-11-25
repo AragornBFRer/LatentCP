@@ -27,6 +27,11 @@ VARIANT_LABELS = {
     "pcp_base": "PCP-base",
     "em_pcp": "EM-PCP",
 }
+VARIANT_COLORS = {
+    "cqr_ignore": "#1f77b4",
+    "pcp_base": "#ff7f0e",
+    "em_pcp": "#2ca02c",
+}
 IMPUTATION_LABELS = {
     "mean_max_tau": "Mean max responsibility",
     "z_feature_mse": "Z-feature MSE",
@@ -72,8 +77,10 @@ def _prepare_tidy(df: pd.DataFrame, spec: MetricSpec) -> pd.DataFrame:
         tidy = df[[col for col in ID_COLS if col in df.columns] + [spec.source]].copy()
         tidy.rename(columns={spec.source: "value"}, inplace=True)
         tidy["variant"] = spec.scalar_label
+        tidy["variant_key"] = spec.scalar_label
     else:
         tidy = _melt_metrics(df, spec.source)
+        tidy["variant_key"] = tidy["variant"]
         if spec.variant_filter:
             tidy = tidy[tidy["variant"].isin(spec.variant_filter)].copy()
         if "use_x_in_em" in tidy.columns:
@@ -172,7 +179,20 @@ def _plot_metric_single(
     df["series_label"] = df.apply(lambda row: _format_series_label(row, series_fields), axis=1)
     series_order = list(dict.fromkeys(df["series_label"]))
     palette_base = sns.color_palette("tab10", max(len(series_order), 3))
-    color_map = {label: palette_base[i % len(palette_base)] for i, label in enumerate(series_order)}
+    color_map = {}
+    palette_idx = 0
+
+    for label in series_order:
+        variant_key = None
+        if "variant_key" in df.columns:
+            matches = df[df["series_label"] == label]["variant_key"]
+            if not matches.empty:
+                variant_key = matches.iloc[0]
+        if variant_key in VARIANT_COLORS:
+            color_map[label] = VARIANT_COLORS[variant_key]
+        else:
+            color_map[label] = palette_base[palette_idx % len(palette_base)]
+            palette_idx += 1
 
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
     sns.lineplot(
