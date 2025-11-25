@@ -7,20 +7,17 @@ import pandas as pd
 
 
 METHOD_SPECS = {
-	"EM-soft": {
-		"coverage": "coverage_soft",
-		"length": "length_soft",
-		"len_ratio": "len_ratio_soft",
-	},
 	"Ignore-Z": {
 		"coverage": "coverage_ignore",
 		"length": "length_ignore",
-		"len_ratio": "len_ratio_ignore",
 	},
-	"PCP": {
-		"coverage": "coverage_pcp",
-		"length": "length_pcp",
-		"len_ratio": "len_ratio_pcp",
+	"PCP-base": {
+		"coverage": "coverage_pcp_base",
+		"length": "length_pcp_base",
+	},
+	"EM-PCP": {
+		"coverage": "coverage_em_pcp",
+		"length": "length_em_pcp",
 	},
 }
 
@@ -41,13 +38,12 @@ def summarise(csv_path: Path) -> pd.DataFrame:
 	rows = []
 	for delta, group in df.groupby("delta"):
 		for label, cols in METHOD_SPECS.items():
-			coverage = group[cols["coverage"]].dropna()
-			len_ratio_col = cols["len_ratio"]
-			if len_ratio_col in group.columns:
-				length_ratio = group[len_ratio_col].dropna()
-			else:
-				length_ratio = (group[cols["length"]] / group["length_oracle"]).dropna()
-			length = group[cols["length"]].dropna()
+			coverage_col = cols["coverage"]
+			length_col = cols["length"]
+			if coverage_col not in group.columns or length_col not in group.columns:
+				continue
+			coverage = group[coverage_col].dropna()
+			length = group[length_col].dropna()
 
 			rows.append(
 				{
@@ -56,8 +52,6 @@ def summarise(csv_path: Path) -> pd.DataFrame:
 					"runs": int(len(group)),
 					"coverage_mean": float(coverage.mean()) if not coverage.empty else float("nan"),
 					"coverage_std": float(coverage.std(ddof=0)) if coverage.size > 0 else float("nan"),
-					"len_ratio_mean": float(length_ratio.mean()) if not length_ratio.empty else float("nan"),
-					"len_ratio_std": float(length_ratio.std(ddof=0)) if length_ratio.size > 0 else float("nan"),
 					"length_mean": float(length.mean()) if not length.empty else float("nan"),
 					"length_std": float(length.std(ddof=0)) if length.size > 0 else float("nan"),
 				}
@@ -76,21 +70,17 @@ def build_markdown(summary_df: pd.DataFrame, source_csv: Path) -> str:
 	summary_df["coverage"] = summary_df.apply(
 		lambda row: _format_value(row["coverage_mean"], row["coverage_std"]), axis=1
 	)
-	summary_df["len_ratio"] = summary_df.apply(
-		lambda row: _format_value(row["len_ratio_mean"], row["len_ratio_std"]), axis=1
-	)
 	summary_df["length"] = summary_df.apply(
 		lambda row: _format_value(row["length_mean"], row["length_std"]), axis=1
 	)
 
-	table_df = summary_df[["delta", "method", "runs", "coverage", "len_ratio", "length"]]
+	table_df = summary_df([["delta", "method", "runs", "coverage", "length"]])
 	table_df = table_df.rename(
 		columns={
 			"delta": "Δ",
 			"method": "Method",
 			"runs": "Rows",
 			"coverage": "Coverage",
-			"len_ratio": "Length Ratio",
 			"length": "Length",
 		}
 	)

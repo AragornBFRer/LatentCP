@@ -34,21 +34,13 @@ em_fit:
   use_X_in_em: [false]
 
 model:
-  ridge_alpha_oracle: 0.0
-  ridge_alpha_soft: 0.0
   ridge_alpha_ignore: 0.0
-  pcp_rf_n_estimators: 300
-  pcp_rf_max_depth: null
-  pcp_rf_min_samples_leaf: 5
-  pcp_rf_n_jobs: -1
 
 io:
   results_csv: "experiments/results/gmm_em_results.csv"
   artifacts_dir: "experiments/artifacts"
 
 pcp:
-  xrzy:
-    enabled: true
   base:
     enabled: true
   em:

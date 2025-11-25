@@ -25,7 +25,11 @@ USE_ROW_LABEL = {
     False: "EM-R (R-only responsibilities)",
     True: "EM-RX (R and X in EM)",
 }
-VARIANT_LABELS = {"oracle": "Oracle-Z", "soft": "EM-soft", "ignore": "Ignore-Z"}
+VARIANT_LABELS = {
+    "ignore": "Ignore-Z",
+    "pcp_base": "PCP-base",
+    "em_pcp": "EM-PCP",
+}
 IMPUTATION_LABELS = {
     "mean_max_tau": "Mean max responsibility",
     "z_feature_mse": "Z-feature MSE",
@@ -345,48 +349,6 @@ def _plot_imputation_metrics(df: pd.DataFrame, out_dir: Path) -> None:
         _plot_metric_grid(tidy, spec, out_dir)
 
 
-def _plot_scatter_relationships(df: pd.DataFrame, out_dir: Path) -> None:
-    tidy = df.copy()
-    tidy["use_label"] = tidy["use_x_in_em"].map(USE_LABEL)
-    tidy["panel"] = tidy.apply(_panel_label, axis=1)
-
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5.2), sharey=True)
-    scatter_kwargs = {
-        "hue": "use_label",
-        "style": "b_scale",
-        "size": "delta",
-        "palette": "tab10",
-        "sizes": (40, 140),
-        "alpha": 0.75,
-    }
-
-    sns.scatterplot(data=tidy, x="mean_max_tau", y="len_ratio_soft", ax=axes[0], **scatter_kwargs)
-    axes[0].set_xlabel("Mean max responsibility")
-    axes[0].set_ylabel("Soft/oracle length ratio")
-    axes[0].axhline(1.0, color="#2c3e50", linestyle=":", linewidth=1)
-    axes[0].set_title("Length ratio vs τ sharpness")
-    axes[0].grid(True, linestyle=":", linewidth=0.6, alpha=0.7)
-
-    sns.scatterplot(data=tidy, x="z_feature_mse", y="len_ratio_soft", ax=axes[1], **scatter_kwargs)
-    axes[1].set_xlabel("Z-feature MSE")
-    axes[1].axhline(1.0, color="#2c3e50", linestyle=":", linewidth=1)
-    axes[1].set_title("Length ratio vs feature error")
-    axes[1].grid(True, linestyle=":", linewidth=0.6, alpha=0.7)
-
-    if axes[0].legend_:
-        axes[0].legend_.remove()
-    handles, labels = axes[1].get_legend_handles_labels()
-    if axes[1].legend_:
-        axes[1].legend_.remove()
-    if handles:
-        axes[1].legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=3, frameon=False)
-
-    fig.tight_layout()
-    ensure_dir(out_dir)
-    fig.savefig(Path(out_dir) / "len_ratio_diagnostics.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-
-
 def _plot_em_diagnostics(df: pd.DataFrame, out_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(6, 4))
     sns.histplot(df["em_iter"], bins=20, kde=False, ax=ax, color="#4c72b0")
@@ -418,18 +380,18 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
             x_candidates=["delta", "sigma_y", "b_scale"],
         ),
         MetricSpec(
-            "len_ratio_",
-            "Length / oracle length",
-            "length_ratio_vs_grid.png",
-            "Length ratio across parameter grid",
+            "length_",
+            "Interval length",
+            "length_vs_grid.png",
+            "Interval length across parameter grid",
             label_map=VARIANT_LABELS,
             x_candidates=["delta", "sigma_y", "b_scale"],
         ),
         MetricSpec(
-            "len_ratio_",
-            "Length / oracle length",
-            "length_ratio_vs_grid_pcp.png",
-            "PCP baseline length ratio across parameter grid",
+            "length_",
+            "Interval length",
+            "length_vs_grid_pcp.png",
+            "PCP baseline interval length across parameter grid",
             label_map={"pcp_base": "PCP-base", "em_pcp": "EM-PCP"},
             x_candidates=["delta", "sigma_y", "b_scale"],
             variant_filter=["pcp_base", "em_pcp"],
@@ -440,17 +402,14 @@ def generate_all_plots(results_csv: str | Path, out_dir: str | Path, alpha: floa
 
     for spec in metric_specs:
         tidy = _prepare_tidy(df, spec)
-        if spec.filename == "length_ratio_vs_grid_pcp.png":
+        if spec.filename == "length_vs_grid_pcp.png":
             tidy = tidy[tidy.get("use_x_in_em", False) == False]
             tidy = tidy.copy()
             tidy["use_label"] = USE_ROW_LABEL[False]
         ref_line = None
         if spec.source == "coverage_":
             ref_line = reference
-        elif spec.source == "len_ratio_":
-            ref_line = 1.0
         _plot_metric_grid(tidy, spec, output_dir, reference=ref_line)
 
     _plot_imputation_metrics(df, output_dir)
-    _plot_scatter_relationships(df, output_dir)
     _plot_em_diagnostics(df, output_dir)

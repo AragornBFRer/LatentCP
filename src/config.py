@@ -51,14 +51,7 @@ class EMConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    ridge_alpha_oracle: float
-    ridge_alpha_soft: float
     ridge_alpha_ignore: float
-    ridge_alpha_xrzy: float
-    pcp_rf_n_estimators: int
-    pcp_rf_max_depth: Optional[int]
-    pcp_rf_min_samples_leaf: int
-    pcp_rf_n_jobs: int
 
 
 @dataclass(frozen=True)
@@ -108,7 +101,6 @@ class PCPVariantOptions:
 
 @dataclass(frozen=True)
 class PCPFamilyConfig:
-    xrzy: PCPVariantOptions
     base: PCPVariantOptions
     em: PCPVariantOptions
 
@@ -216,18 +208,6 @@ def _parse_eta_vector(raw_values, dim: int, default: Iterable[float]) -> List[fl
         else:
             raise ValueError(f"'eta' requires at least {dim} entries, got {len(seq)}")
     return [float(seq[idx]) for idx in range(dim)]
-
-
-def _parse_optional_int(value) -> Optional[int]:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        if value.strip().lower() in {"", "none", "null"}:
-            return None
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
-        raise ValueError(f"Expected optional integer, got {value!r}") from exc
 
 
 def _parse_pcp_variant(raw: dict | None, *, enabled_default: bool) -> PCPVariantOptions:
@@ -353,21 +333,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
         use_X_in_em=[bool(v) for v in _expand_range(e_raw.get("use_X_in_em", [False]))],
     )
 
-    max_depth_val = _parse_optional_int(m_raw.get("pcp_rf_max_depth"))
     model_cfg = ModelConfig(
-        ridge_alpha_oracle=float(m_raw.get("ridge_alpha_oracle", 0.0)),
-        ridge_alpha_soft=float(m_raw.get("ridge_alpha_soft", m_raw.get("ridge_alpha", 0.0))),
-        ridge_alpha_ignore=float(m_raw.get("ridge_alpha_ignore", 0.0)),
-        ridge_alpha_xrzy=float(
-            m_raw.get(
-                "ridge_alpha_xrzy",
-                m_raw.get("ridge_alpha_ignore", m_raw.get("ridge_alpha", 0.0)),
-            )
-        ),
-        pcp_rf_n_estimators=int(m_raw.get("pcp_rf_n_estimators", 200)),
-        pcp_rf_max_depth=max_depth_val,
-        pcp_rf_min_samples_leaf=int(m_raw.get("pcp_rf_min_samples_leaf", 5)),
-        pcp_rf_n_jobs=int(m_raw.get("pcp_rf_n_jobs", -1)),
+        ridge_alpha_ignore=float(m_raw.get("ridge_alpha_ignore", m_raw.get("ridge_alpha", 0.0)))
     )
 
     io_cfg = IOConfig(
@@ -376,8 +343,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
     )
 
     pcp_cfg = PCPFamilyConfig(
-        xrzy=_parse_pcp_variant(p_raw.get("xrzy"), enabled_default=True),
-        base=_parse_pcp_variant(p_raw.get("base"), enabled_default=False),
+        base=_parse_pcp_variant(p_raw.get("base"), enabled_default=True),
         em=_parse_pcp_variant(p_raw.get("em"), enabled_default=False),
     )
 

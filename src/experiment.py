@@ -14,7 +14,7 @@ from .conformal import split_conformal
 from .data_gen import DatasetSplit, generate_data
 from .doc_em import fit_doc_em, responsibilities_from_r, responsibilities_with_y
 from .metrics import avg_length, coverage, cross_entropy, mean_max_tau, z_feature_mse
-from .predictors import EMSoftPredictor, IgnoreZPredictor, OracleZPredictor, XRZYPredictor
+from .predictors import IgnoreZPredictor
 from .utils import ensure_dir, rng_from_seed
 from .pcp import PCPConfig, train_pcp
 from .pcp_membership import MembershipPCPModel
@@ -102,7 +102,7 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     sigma = np.asarray(true_params["sigma"], dtype=float)
     pi_prior = np.asarray(true_params["pi"], dtype=float)
 
-    em_params, tau_train = fit_doc_em(
+    em_params, _ = fit_doc_em(
         train.X,
         train.R,
         train.Y,
@@ -117,109 +117,48 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     tau_cal = responsibilities_with_y(cal.X, cal.R, cal.Y, em_params)
     tau_test = responsibilities_from_r(test.R, em_params)
 
-    means_r_true = true_params["means_r"]
-    z_star_train = means_r_true[train.Z]
-    z_star_cal = means_r_true[cal.Z]
-    z_star_test = means_r_true[test.Z]
-
     mu_hat_r = em_params.mu_r
-    z_soft_train = tau_train @ mu_hat_r
-    z_soft_cal = tau_cal @ mu_hat_r
+    means_r_true = true_params["means_r"]
+    z_star_test = means_r_true[test.Z]
     z_soft_test = tau_test @ mu_hat_r
 
-    oracle = OracleZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_oracle).fit(
-        train.X, train.Y, z_star=z_star_train
-    )
-    soft = EMSoftPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_soft).fit(
-        train.X, train.Y, z_feat=z_soft_train
-    )
     ignore = IgnoreZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_ignore).fit(train.X, train.Y)
+    scores_ignore = np.abs(cal.Y - ignore.predict_mean(cal.X))
+    q_ignore = split_conformal(scores_ignore, cfg.global_cfg.alpha)
+    mu_ignore_test = ignore.predict_mean(test.X)
 
-    scores = {
-        "oracle": np.abs(cal.Y - oracle.predict_mean(cal.X, z_star=z_star_cal)),
-        "soft": np.abs(cal.Y - soft.predict_mean(cal.X, z_feat=z_soft_cal)),
-        "ignore": np.abs(cal.Y - ignore.predict_mean(cal.X)),
-    }
-
-    qhat = {name: split_conformal(vals, cfg.global_cfg.alpha) for name, vals in scores.items()}
-
-    preds_test = {
-        "oracle": oracle.predict_mean(test.X, z_star=z_star_test),
-        "soft": soft.predict_mean(test.X, z_feat=z_soft_test),
-        "ignore": ignore.predict_mean(test.X),
-    }
-
-    xrzy = XRZYPredictor(
-        n_estimators=cfg.model_cfg.pcp_rf_n_estimators,
-        max_depth=cfg.model_cfg.pcp_rf_max_depth,
-        min_samples_leaf=cfg.model_cfg.pcp_rf_min_samples_leaf,
-        n_jobs=cfg.model_cfg.pcp_rf_n_jobs,
-        random_state=int(rng.integers(0, 2**32 - 1)),
-    ).fit(train.X, train.Y, R=train.R)
-    mu_cal_pcp = xrzy.predict_mean(cal.X, R=cal.R)
-    mu_test_pcp = xrzy.predict_mean(test.X, R=test.R)
-    scores_pcp = np.abs(cal.Y - mu_cal_pcp)
+    features_train = _concat_features(train.X, train.R)
+    features_cal = _concat_features(cal.X, cal.R)
+    features_test = _concat_features(test.X, test.R)
+    joint_predictor = IgnoreZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_ignore).fit(
+        features_train, train.Y
+    )
+    mu_cal_joint = joint_predictor.predict_mean(features_cal)
+    mu_test_joint = joint_predictor.predict_mean(features_test)
+    scores_joint = np.abs(cal.Y - mu_cal_joint)
 
     results = {}
-    for name in preds_test:
-        q = qhat[name]
-        mu = preds_test[name]
-        results[f"coverage_{name}"] = coverage(test.Y, mu, q)
-        results[f"length_{name}"] = avg_length(q)
-
-    length_oracle = results["length_oracle"]
-    denom = length_oracle if length_oracle != 0 else 1e-12
-    results["len_ratio_soft"] = results["length_soft"] / denom
-    results["len_ratio_ignore"] = results["length_ignore"] / denom
-
-    # XRZY-specific PCP (R-only membership)
-    results["coverage_pcp"] = np.nan
-    results["length_pcp"] = np.nan
-    results["len_ratio_pcp"] = np.nan
-    results["pcp_frac_inf"] = np.nan
-    results["pcp_precision"] = np.nan
-    results["pcp_clusters"] = np.nan
-    results["pcp_cluster_r2"] = np.nan
-    qhat_pcp = np.full(test.Y.shape, np.nan)
-    if cfg.pcp_cfg.xrzy.enabled:
-        pcp_model = train_pcp(
-            cal.R,
-            scores_pcp,
-            alpha=cfg.global_cfg.alpha,
-            rng=rng,
-            config=_variant_to_pcp_config(cfg.pcp_cfg.xrzy),
-        )
-        qhat_pcp = pcp_model.quantiles(test.R, rng)
-        results["coverage_pcp"] = coverage(test.Y, mu_test_pcp, qhat_pcp)
-        results["length_pcp"] = avg_length(qhat_pcp)
-        results["len_ratio_pcp"] = results["length_pcp"] / denom
-        results["pcp_frac_inf"] = float(np.mean(~np.isfinite(qhat_pcp)))
-        results["pcp_precision"] = float(pcp_model.precision)
-        results["pcp_clusters"] = float(pcp_model.n_clusters)
-        results["pcp_cluster_r2"] = float(pcp_model.cluster_r2)
+    results["coverage_ignore"] = coverage(test.Y, mu_ignore_test, q_ignore)
+    results["length_ignore"] = avg_length(q_ignore)
 
     # PCP-base using (X, R) features
     results["coverage_pcp_base"] = np.nan
     results["length_pcp_base"] = np.nan
-    results["len_ratio_pcp_base"] = np.nan
     results["pcp_base_frac_inf"] = np.nan
     results["pcp_base_precision"] = np.nan
     results["pcp_base_clusters"] = np.nan
     results["pcp_base_cluster_r2"] = np.nan
     if cfg.pcp_cfg.base.enabled:
-        base_features_cal = _concat_features(cal.X, cal.R)
-        base_features_test = _concat_features(test.X, test.R)
         pcp_base_model = train_pcp(
-            base_features_cal,
-            scores_pcp,
+            features_cal,
+            scores_joint,
             alpha=cfg.global_cfg.alpha,
             rng=rng,
             config=_variant_to_pcp_config(cfg.pcp_cfg.base),
         )
-        qhat_pcp_base = pcp_base_model.quantiles(base_features_test, rng)
-        results["coverage_pcp_base"] = coverage(test.Y, mu_test_pcp, qhat_pcp_base)
+        qhat_pcp_base = pcp_base_model.quantiles(features_test, rng)
+        results["coverage_pcp_base"] = coverage(test.Y, mu_test_joint, qhat_pcp_base)
         results["length_pcp_base"] = avg_length(qhat_pcp_base)
-        results["len_ratio_pcp_base"] = results["length_pcp_base"] / denom
         results["pcp_base_frac_inf"] = float(np.mean(~np.isfinite(qhat_pcp_base)))
         results["pcp_base_precision"] = float(pcp_base_model.precision)
         results["pcp_base_clusters"] = float(pcp_base_model.n_clusters)
@@ -228,7 +167,6 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     # EM-PCP using memberships from the doc-style EM fit
     results["coverage_em_pcp"] = np.nan
     results["length_em_pcp"] = np.nan
-    results["len_ratio_em_pcp"] = np.nan
     results["em_pcp_frac_inf"] = np.nan
     results["em_pcp_precision"] = np.nan
     results["em_pcp_clusters"] = np.nan
@@ -243,15 +181,14 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
         membership_cfg = _variant_to_pcp_config(cfg.pcp_cfg.em)
         em_model = MembershipPCPModel.fit(
             pi_cal_em,
-            scores_pcp,
+            scores_joint,
             alpha=cfg.global_cfg.alpha,
             rng=rng,
             config=membership_cfg,
         )
         qhat_em = em_model.quantiles(pi_test_em, rng)
-        results["coverage_em_pcp"] = coverage(test.Y, mu_test_pcp, qhat_em)
+        results["coverage_em_pcp"] = coverage(test.Y, mu_test_joint, qhat_em)
         results["length_em_pcp"] = avg_length(qhat_em)
-        results["len_ratio_em_pcp"] = results["length_em_pcp"] / denom
         results["em_pcp_frac_inf"] = float(np.mean(~np.isfinite(qhat_em)))
         results["em_pcp_precision"] = float(em_model.precision)
         results["em_pcp_clusters"] = float(pi_cal_em.shape[1])
@@ -331,7 +268,22 @@ def run_experiment(
     df.drop_duplicates(subset="__key", keep="last", inplace=True)
     df.sort_values(key_cols, inplace=True)
     df.drop(columns="__key", inplace=True)
-    for legacy_col in ["len_gap_soft", "len_gap_ignore"]:
+    legacy_cols = [
+        "len_gap_soft",
+        "len_gap_ignore",
+        "coverage_oracle",
+        "length_oracle",
+        "coverage_soft",
+        "length_soft",
+        "coverage_pcp",
+        "length_pcp",
+        "len_ratio_soft",
+        "len_ratio_ignore",
+        "len_ratio_pcp",
+        "len_ratio_pcp_base",
+        "len_ratio_em_pcp",
+    ]
+    for legacy_col in legacy_cols:
         if legacy_col in df.columns:
             df.drop(columns=legacy_col, inplace=True)
     df.to_csv(results_path, index=False)

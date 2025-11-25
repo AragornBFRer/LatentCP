@@ -1,22 +1,12 @@
-"""Regression models using oracle or EM-imputed cluster means."""
+"""Lightweight regression baselines for latent conformal experiments."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
 
 
 def _augment(X: np.ndarray) -> np.ndarray:
     n = X.shape[0]
     return np.hstack([np.ones((n, 1)), X])
-
-
-def _ensure_2d(arr: np.ndarray) -> np.ndarray:
-    out = np.asarray(arr, dtype=float)
-    if out.ndim == 1:
-        return out.reshape(-1, 1)
-    return out
 
 
 def _solve_linear(design: np.ndarray, target: np.ndarray, ridge_alpha: float) -> np.ndarray:
@@ -61,107 +51,3 @@ class IgnoreZPredictor(Predictor):
         return design @ self.coef
 
 
-class OracleZPredictor(Predictor):
-    def __init__(self, ridge_alpha: float = 0.0) -> None:
-        self.ridge_alpha = ridge_alpha
-        self.intercept: float | None = None
-        self.theta: np.ndarray | None = None
-        self.b: np.ndarray | None = None
-
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, z_star: np.ndarray, **kwargs) -> "OracleZPredictor":
-        z_feat = _ensure_2d(z_star)
-        design = np.hstack([_augment(X), z_feat])
-        coef = _solve_linear(design, Y, self.ridge_alpha)
-        self.intercept = float(coef[0])
-        self.theta = coef[1 : 1 + X.shape[1]]
-        self.b = coef[1 + X.shape[1] :]
-        return self
-
-    def predict_mean(self, X: np.ndarray, *, z_star: np.ndarray, **kwargs) -> np.ndarray:
-        if self.intercept is None or self.theta is None or self.b is None:
-            raise RuntimeError("Model not fitted")
-        z_feat = _ensure_2d(z_star)
-        base = self.intercept + X @ self.theta if X.size else np.full(z_feat.shape[0], self.intercept)
-        return base + (z_feat @ self.b)
-
-
-@dataclass
-class SoftParams:
-    intercept: float
-    theta: np.ndarray
-    b: np.ndarray
-
-
-class EMSoftPredictor(Predictor):
-    def __init__(self, ridge_alpha: float = 0.0) -> None:
-        self.ridge_alpha = ridge_alpha
-        self.params: SoftParams | None = None
-
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, z_feat: np.ndarray, **kwargs) -> "EMSoftPredictor":
-        z_feature = _ensure_2d(z_feat)
-        design = np.hstack([_augment(X), z_feature])
-        coef = _solve_linear(design, Y, self.ridge_alpha)
-        intercept = float(coef[0])
-        theta = coef[1 : 1 + X.shape[1]]
-        b = coef[1 + X.shape[1] :]
-        self.params = SoftParams(intercept=intercept, theta=theta, b=b)
-        return self
-
-    def predict_mean(self, X: np.ndarray, *, z_feat: np.ndarray, **kwargs) -> np.ndarray:
-        if self.params is None:
-            raise RuntimeError("Model not fitted")
-        z_feature = _ensure_2d(z_feat)
-        base = self.params.intercept + X @ self.params.theta if X.size else np.full(z_feature.shape[0], self.params.intercept)
-        return base + (z_feature @ self.params.b)
-
-
-class XRZYPredictor(Predictor):
-    def __init__(
-        self,
-        *,
-        n_estimators: int = 200,
-        max_depth: int | None = None,
-        min_samples_leaf: int = 5,
-        n_jobs: int = -1,
-        random_state: int | None = None,
-    ) -> None:
-        self.model = RandomForestRegressor(
-            n_estimators=n_estimators,
-            max_depth=max_depth,
-            min_samples_leaf=min_samples_leaf,
-            n_jobs=n_jobs,
-            random_state=random_state,
-        )
-        self._d_x: int | None = None
-        self._d_r: int | None = None
-
-    def fit(self, X: np.ndarray, Y: np.ndarray, *, R: np.ndarray, **kwargs) -> "XRZYPredictor":
-        X_arr = np.asarray(X, dtype=float)
-        R_arr = np.asarray(R, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr.reshape(-1, 1)
-        if R_arr.ndim == 1:
-            R_arr = R_arr.reshape(-1, 1)
-        if X_arr.shape[0] != R_arr.shape[0]:
-            raise ValueError("X and R must have matching sample counts")
-        design = np.hstack([X_arr, R_arr]) if X_arr.size and R_arr.size else (X_arr if X_arr.size else R_arr)
-        self.model.fit(design, np.asarray(Y, dtype=float).ravel())
-        self._d_x = X_arr.shape[1]
-        self._d_r = R_arr.shape[1]
-        return self
-
-    def predict_mean(self, X: np.ndarray, *, R: np.ndarray, **kwargs) -> np.ndarray:
-        if self._d_x is None or self._d_r is None:
-            raise RuntimeError("Model not fitted")
-        X_arr = np.asarray(X, dtype=float)
-        R_arr = np.asarray(R, dtype=float)
-        if X_arr.ndim == 1:
-            X_arr = X_arr.reshape(-1, 1)
-        if R_arr.ndim == 1:
-            R_arr = R_arr.reshape(-1, 1)
-        if X_arr.shape[0] != R_arr.shape[0]:
-            raise ValueError("X and R must have matching sample counts")
-        if X_arr.shape[1] != self._d_x or R_arr.shape[1] != self._d_r:
-            raise ValueError("Input feature dimensions differ from those seen during fitting")
-        design = np.hstack([X_arr, R_arr]) if X_arr.size and R_arr.size else (X_arr if X_arr.size else R_arr)
-        return self.model.predict(design)
