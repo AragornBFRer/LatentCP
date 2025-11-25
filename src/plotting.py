@@ -26,7 +26,7 @@ USE_ROW_LABEL = {
     True: "EM-RX (R and X in EM)",
 }
 VARIANT_LABELS = {
-    "ignore": "Ignore-Z",
+    "cqr_ignore": "CQR-ignoreZ",
     "pcp_base": "PCP-base",
     "em_pcp": "EM-PCP",
 }

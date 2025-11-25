@@ -100,21 +100,21 @@ Other key YAML knobs:
 - `global`: seeds, split sizes, target `alpha`.
 - `dgp`: latent structure (`K_list`, `delta_list`, `alpha`, `sigma`, `mu_r`, `eta0`, `eta`).
 - `em_fit`: how to fit responsibilities (`use_X_in_em`, covariance model, iterations).
-- `model`: ridge penalty for the linear regressors (shared by ignore and joint predictors).
+- `model`: RandomForest hyperparameters shared by CQR-ignoreZ and the PCP residual model.
 
 Included predictors / objects in this repo:
 
 | Name | What it means / uses |
 | --- | --- |
-| **Ignore-Z** | Models `μ_ignore(x) = θ₀ + θᵀ x` only, so its split-conformal band is `C_ignore(x) = { y : |y - μ_ignore(x)| ≤ q_ignore }`; no latent information enters. |
-| **PCP-base** | Fits a joint linear predictor `μ_joint(x,r) = θ₀ + θᵀ [x; r]`, uses residuals `|y - μ_joint(x,r)|`, and conditions posterior conformal quantiles on the same `[x; r]` block, yielding `C_base(x,r) = { y : |y - μ_joint(x,r)| ≤ q_base(x,r) }`. |
+| **CQR-ignoreZ** | Fits a RandomForest on `[X; R]` as a quantile regressor, then applies conformalized quantile regression (CQR) so the calibrated band is `C_cqr(x,r) = [\hat{q}_{α/2}(x,r) - \,\hat{s}, \hat{q}_{1-α/2}(x,r) + \,\hat{s}]`. |
+| **PCP-base** | Uses a RandomForest mean predictor on `[X; R]` to produce residuals `|y - μ_rf(x,r)|`, then feeds those residuals into PCP to obtain adaptive radii `q_base(x,r)` for the same feature block. |
 | **EM-PCP** | Uses doc-EM memberships `π(x,r,y)` to weight the joint residuals via `MembershipPCPModel`, giving `C_em(x,r) = { y : |y - μ_joint(x,r)| ≤ q_em(π(x,r,y)) }`. |
 | **EM-R / EM-RX** | Responsibility pipelines feeding EM-PCP: EM-R fits the GMM on `R` alone (features `τ_R(r)`), while EM-RX fits on `[R; X]` (`τ_RX(x,r)`), toggled by `em_fit.use_X_in_em`. |
 | **MembershipPCPModel** | Consumes membership weights `π` and outputs quantiles `q(π)` by multinomial-precision weighting, enabling set construction `C(π) = { y : |y - μ_joint| ≤ q(π) }`. |
 
 **Doc-style updates:**
 
-- Joint residuals for PCP now come from a single linear model on `[X; R]`, avoiding dependencies on oracle-style regressors.
+- Both CQR-ignoreZ and PCP-base now share a RandomForest backbone on `[X; R]`, removing the need for oracle-style linear regressors.
 - EM diagnostics and EM-PCP continue to draw memberships from
 	`src/doc_em.py`, ensuring consistency with the simulator assumptions.
 

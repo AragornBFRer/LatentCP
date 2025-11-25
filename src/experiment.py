@@ -9,12 +9,22 @@ from typing import Dict, Iterable, List, Sequence
 import numpy as np
 import pandas as pd
 
-from .config import ExperimentConfig, PCPVariantOptions, RunConfig, iter_run_configs, load_config
+from .config import (
+    ExperimentConfig,
+    PCPVariantOptions,
+    RunConfig,
+    iter_run_configs,
+    load_config,
+)
 from .conformal import split_conformal
 from .data_gen import DatasetSplit, generate_data
 from .doc_em import fit_doc_em, responsibilities_from_r, responsibilities_with_y
 from .metrics import avg_length, coverage, cross_entropy, mean_max_tau, z_feature_mse
-from .predictors import IgnoreZPredictor
+from .predictors import (
+    RandomForestMeanPredictor,
+    RandomForestParams,
+    RandomForestQuantilePredictor,
+)
 from .utils import ensure_dir, rng_from_seed
 from .pcp import PCPConfig, train_pcp
 from .pcp_membership import MembershipPCPModel
@@ -47,6 +57,16 @@ def _variant_to_pcp_config(variant: PCPVariantOptions) -> PCPConfig:
         proj_lr=variant.proj_lr,
         proj_max_iter=variant.proj_max_iter,
         proj_tol=variant.proj_tol,
+    )
+
+
+def _sample_rf_params(model_cfg, rng: np.random.Generator) -> RandomForestParams:
+    return RandomForestParams(
+        n_estimators=model_cfg.rf_n_estimators,
+        max_depth=model_cfg.rf_max_depth,
+        min_samples_leaf=model_cfg.rf_min_samples_leaf,
+        n_jobs=model_cfg.rf_n_jobs,
+        random_state=int(rng.integers(0, 2**31 - 1)),
     )
 
 
@@ -121,24 +141,34 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     z_star_test = means_r_true[test.Z]
     z_soft_test = tau_test @ mu_hat_r
 
-    ignore = IgnoreZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_ignore).fit(train.X, train.Y)
-    scores_ignore = np.abs(cal.Y - ignore.predict_mean(cal.X))
-    q_ignore = split_conformal(scores_ignore, cfg.global_cfg.alpha)
-    mu_ignore_test = ignore.predict_mean(test.X)
-
     features_train = _concat_features(train.X, train.R)
     features_cal = _concat_features(cal.X, cal.R)
     features_test = _concat_features(test.X, test.R)
-    joint_predictor = IgnoreZPredictor(ridge_alpha=cfg.model_cfg.ridge_alpha_ignore).fit(
-        features_train, train.Y
-    )
+
+    # CQR-ignoreZ interval via RandomForest quantile regression
+    alpha_lo = 0.5 * cfg.global_cfg.alpha
+    alpha_hi = 1.0 - alpha_lo
+    quantile_levels = (alpha_lo, alpha_hi)
+    cqr_params = _sample_rf_params(cfg.model_cfg, rng)
+    cqr_model = RandomForestQuantilePredictor(cqr_params).fit(features_train, train.Y)
+    cal_bounds = cqr_model.predict_quantiles(features_cal, quantile_levels)
+    scores_cqr = np.maximum(cal_bounds[:, 0] - cal.Y, cal.Y - cal_bounds[:, 1])
+    q_cqr = split_conformal(scores_cqr, cfg.global_cfg.alpha)
+    test_bounds = cqr_model.predict_quantiles(features_test, quantile_levels)
+    lower_cqr = test_bounds[:, 0] - q_cqr
+    upper_cqr = test_bounds[:, 1] + q_cqr
+    center_cqr = 0.5 * (lower_cqr + upper_cqr)
+    radius_cqr = 0.5 * (upper_cqr - lower_cqr)
+
+    rf_mean_params = _sample_rf_params(cfg.model_cfg, rng)
+    joint_predictor = RandomForestMeanPredictor(rf_mean_params).fit(features_train, train.Y)
     mu_cal_joint = joint_predictor.predict_mean(features_cal)
     mu_test_joint = joint_predictor.predict_mean(features_test)
     scores_joint = np.abs(cal.Y - mu_cal_joint)
 
     results = {}
-    results["coverage_ignore"] = coverage(test.Y, mu_ignore_test, q_ignore)
-    results["length_ignore"] = avg_length(q_ignore)
+    results["coverage_cqr_ignore"] = coverage(test.Y, center_cqr, radius_cqr)
+    results["length_cqr_ignore"] = avg_length(radius_cqr)
 
     # PCP-base using (X, R) features
     results["coverage_pcp_base"] = np.nan

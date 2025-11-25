@@ -44,7 +44,10 @@ class EMConfig:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    ridge_alpha_ignore: float
+    rf_n_estimators: int
+    rf_max_depth: Optional[int]
+    rf_min_samples_leaf: int
+    rf_n_jobs: int
 
 
 @dataclass(frozen=True)
@@ -306,8 +309,14 @@ def load_config(path: str | Path) -> ExperimentConfig:
         use_X_in_em=[bool(v) for v in _expand_range(e_raw.get("use_X_in_em", [False]))],
     )
 
+    rf_max_depth = m_raw.get("rf_max_depth")
+    if rf_max_depth is not None:
+        rf_max_depth = int(rf_max_depth)
     model_cfg = ModelConfig(
-        ridge_alpha_ignore=float(m_raw.get("ridge_alpha_ignore", m_raw.get("ridge_alpha", 0.0)))
+        rf_n_estimators=int(m_raw.get("rf_n_estimators", 400)),
+        rf_max_depth=rf_max_depth,
+        rf_min_samples_leaf=int(m_raw.get("rf_min_samples_leaf", 5)),
+        rf_n_jobs=int(m_raw.get("rf_n_jobs", -1)),
     )
 
     io_cfg = IOConfig(
