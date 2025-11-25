@@ -20,11 +20,7 @@ from .conformal import split_conformal
 from .data_gen import DatasetSplit, generate_data
 from .doc_em import fit_doc_em, responsibilities_from_r, responsibilities_with_y
 from .metrics import avg_length, coverage, cross_entropy, mean_max_tau, z_feature_mse
-from .predictors import (
-    RandomForestMeanPredictor,
-    RandomForestParams,
-    RandomForestQuantilePredictor,
-)
+from .predictors import RandomForestParams, RandomForestQuantilePredictor
 from .utils import ensure_dir, rng_from_seed
 from .pcp import PCPConfig, train_pcp
 from .pcp_membership import MembershipPCPModel
@@ -160,10 +156,8 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     center_cqr = 0.5 * (lower_cqr + upper_cqr)
     radius_cqr = 0.5 * (upper_cqr - lower_cqr)
 
-    rf_mean_params = _sample_rf_params(cfg.model_cfg, rng)
-    joint_predictor = RandomForestMeanPredictor(rf_mean_params).fit(features_train, train.Y)
-    mu_cal_joint = joint_predictor.predict_mean(features_cal)
-    mu_test_joint = joint_predictor.predict_mean(features_test)
+    mu_cal_joint = cqr_model.predict_mean(features_cal)
+    mu_test_joint = cqr_model.predict_mean(features_test)
     scores_joint = np.abs(cal.Y - mu_cal_joint)
 
     results = {}
