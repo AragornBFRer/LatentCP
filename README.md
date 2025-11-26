@@ -34,9 +34,9 @@ these doc-style responsibilities.
 
 ---
 
-## 1. Run the remaining baselines
+## 1. Run the experiment (EM-PCP vs. baselines)
 
-### One-click runner (Linux/macOS)
+### Quick start (Linux/macOS)
 
 ```bash
 chmod +x run.sh
