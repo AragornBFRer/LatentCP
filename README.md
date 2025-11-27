@@ -10,7 +10,7 @@ The simulator now mirrors the specification in `sim_model-dgp.md`:
 	$\alpha = (1, 2, 3, 4)$, and $\varepsilon_Z \sim \mathcal{N}(0, \sigma_Z^2)$ with $\sigma = (1, 2, 4, 8)$.
 	**Outcome:** $Y = \eta_0 + \eta^\top X + \alpha_Z + \varepsilon_Z$, where $\eta_0 = 0.5$, $\eta = (1, -0.5, 0.8)$,
 	$\alpha = (1, 2, 3, 4)$, and $\varepsilon_Z \sim \mathcal{N}(0, \sigma_Z^2)$ with $\sigma = (1, 2, 4, 8)$.
-	The actual shift used in any run is $\tilde{\alpha}_k = \delta \cdot \alpha_k$ where $\delta \in \text{dgp.delta\_list}$
+	The actual shift used in any run is $\tilde{\alpha}_k = \delta \cdot \alpha_k$ where $\delta$ is a list of scaling factors for $\alpha_k$
 	(default: five values `[0.5, 0.75, 1.0, 1.5, 2.0]`). This “mixture separation”
 	knob lets you sweep how distinct the clusters are without redefining $\alpha$.
 - No leakage: `R` only informs `Y` through the latent cluster.
