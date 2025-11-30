@@ -1,3 +1,8 @@
+> ### Notice
+> This is an ongoing project and subject to changes
+
+### Config
+
 Default configs live in `experiments/configs/gmm_em.yaml`.
 
 ---
