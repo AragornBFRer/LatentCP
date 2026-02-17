@@ -30,6 +30,7 @@ USE_ROW_LABEL = {
 }
 VARIANT_LABELS = {
     "cqr_ignore": "CQR-ignoreZ",
+    "oracle_full": "Oracle (true μ, Z)",
     "pcp_xr": "PCP (X,R)",
     "pcp_xz": "PCP (X,Z)",
     "pcp_xzhat": "PCP (X,ẑ)",
@@ -39,6 +40,7 @@ VARIANT_LABELS = {
 }
 VARIANT_COLORS = {
     "cqr_ignore": "#1f77b4",
+    "oracle_full": "#17becf",
     "pcp_xr": "#ff7f0e",
     "pcp_xz": "#9467bd",
     "pcp_xzhat": "#8c564b",

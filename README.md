@@ -1,6 +1,4 @@
-> ### Notice
-> This is an ongoing project and subject to changes
-> 
+> [!NOTE]
 > If you find this project interesting, you might also want to check out [MDCP](https://github.com/AragornBFRer/MDCP)!
 
 ### Config
@@ -139,6 +137,7 @@ Included predictors / objects in this repo:
 | Name | What it means / uses |
 | --- | --- |
 | **CQR-ignoreZ** | RandomForest quantile regressor on `[X; R]` with conformalized quantile regression calibration. Still available, but mainly serves as an external reference. |
+| **Oracle (true μ, Z)** | **Fully oracle split-conformal baseline**: uses the simulator's ground-truth regression function $\mu(x,z)=\eta_0+\eta^\top x+\alpha_z$ with the **true** latent label $Z$ revealed. No regressor is fit; we calibrate $\hat q$ on $|Y-\mu(X,Z)|$ and report intervals $[\mu(X,Z)\pm\hat q]$. Columns: `coverage_oracle_full`, `length_oracle_full`. |
 | **PCP (X,R)** | RandomForest mean model on `[X; R]` produces residuals `|y - μ_rf(x,r)|` that drive the PCP clustering/reweighting pipeline. |
 | **PCP (X,Z)** | Oracle PCP that augments the regressors and clustering features with the true latent one-hot $Z$. Helpful for gauging the ceiling when the latent label is known. |
 | **PCP (X,$\hat{z}$)** | Uses doc-EM responsibilities $\hat{z} = \pi(x,r,y)$ (soft memberships) instead of the oracle $Z$, measuring how much benefit calibrated memberships alone provide. |
@@ -148,6 +147,11 @@ Included predictors / objects in this repo:
 | **MembershipPCPModel** | Consumes membership weights $\pi$ and outputs quantiles $q(\pi)$ by multinomial-precision weighting, enabling set construction $C(\pi) = \{ y : |y - \mu_{\text{joint}}| \le q(\pi) \}$. |
 
 Here $\hat{z}$ always refers to the doc-EM responsibilities returned by `responsibilities_with_y` / `responsibilities_from_r`.
+
+Notes on "oracle" baselines:
+
+- **Oracle (true μ, Z)** removes *regression estimation error* entirely by using the known simulator parameters and the revealed latent label.
+- **PCP (X,Z)** is an "oracle feature" baseline (it is still learning a RandomForest center model and PCP's internal calibration models), but it removes *latent-label uncertainty* by supplying the true one-hot $Z$ as a covariate.
 
 **Doc-style updates:**
 
@@ -199,12 +203,3 @@ Key options:
 - `--results`: points to any CSV produced by `main.py`/`multi_main.py`.
 - `--out` and `--filename`: control the destination folder and PDF name (must end in `.pdf`).
 - `--use-x-in-em`: choose which EM responsibility fit to display: `false` (default, EM-R), `true` (EM-RX), or `auto` (plot everything that exists in the CSV).
-
----
-
-## 4. Quick troubleshooting & tips
-
-- Want shorter debug cycles? Shrink `global.n_train`, `n_cal`, `n_test`, and limit `dgp` lists to a single value.
-- The EM step can be expensive for EM-PCP; lower `em_fit.max_iter` / `n_init` during experimentation.
-- Large `precision_grid` entries increase PCP runtime. Start with `[20, 50, 100]` before scaling up.
-- Reuse previous CSVs by pointing `--results` to the same path; the runner will deduplicate by key `(seed, K, delta, use_x_in_em)`.

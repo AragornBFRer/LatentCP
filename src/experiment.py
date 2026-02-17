@@ -228,6 +228,18 @@ def _run_single(cfg: ExperimentConfig, run_cfg: RunConfig) -> Dict[str, float]:
     results["coverage_cqr_ignore"] = coverage(test.Y, center_cqr, radius_cqr)
     results["length_cqr_ignore"] = avg_length(radius_cqr)
 
+    # Fully-oracle baseline: true regression function with revealed latent label Z.
+    # Uses split conformal on absolute residuals, without fitting any regressor.
+    eta0_true = float(true_params["eta0"])
+    eta_true = np.asarray(true_params["eta"], dtype=float)
+    alpha_true = np.asarray(true_params["alpha"], dtype=float)
+    mu_cal_oracle = eta0_true + (cal.X @ eta_true if cal.X.size else 0.0) + alpha_true[np.asarray(cal.Z, dtype=int)]
+    scores_oracle = np.abs(cal.Y - mu_cal_oracle)
+    q_oracle = split_conformal(scores_oracle, cfg.global_cfg.alpha)
+    mu_test_oracle = eta0_true + (test.X @ eta_true if test.X.size else 0.0) + alpha_true[np.asarray(test.Z, dtype=int)]
+    results["coverage_oracle_full"] = coverage(test.Y, mu_test_oracle, q_oracle)
+    results["length_oracle_full"] = avg_length(q_oracle)
+
     pcp_variant_names = list(PCP_INPUT_SPECS.keys())
     for name in pcp_variant_names:
         results[f"coverage_{name}"] = np.nan
