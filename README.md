@@ -7,9 +7,9 @@ Default configs live in `experiments/configs/gmm_em.yaml`.
 
 ---
 
-## XRZY simulation recap
+## XRZY simulation setup
 
-The simulator now mirrors the specification in `sim_model-dgp.md`:
+The simulator:
 
 - **Auxiliary feature:** $R \mid Z = k \sim \mathcal{N}(\mu_{R,k}, 1)$ with $\mu_R = (-3, -1, 1, 3)$.
 	$\alpha = (1, 2, 3, 4)$, and $\varepsilon_Z \sim \mathcal{N}(0, \sigma_Z^2)$ with $\sigma = (1, 2, 4, 8)$.
@@ -25,7 +25,7 @@ Those constants can be overridden through the `dgp` block in the YAML (see
 
 ### EM routine
 
-`src/doc_em.py` implements the EM algorithm described in `sim_algo.md`:
+`src/doc_em.py` implements the EM algorithm:
 
 - E-step scores jointly log-likelihoods for `(R, Y)` given cluster `k`.
 - M-step performs the weighted least squares update for `(η₀, η)` and updates
@@ -33,9 +33,6 @@ Those constants can be overridden through the `dgp` block in the YAML (see
 - Responsibilities on calibration data use the observed `(R, Y)`, whereas test
 	memberships fall back to the R-only formula $\pi_k(R) \propto \pi_k \mathcal{N}(R \mid \mu_{R,k}, 1)$.
 - EM-PCP reuses these memberships instead of fitting a separate joint GMM.
-
-The soft predictor and diagnostics (`mean_max_tau`, `z_feature_mse`) now rely on
-these doc-style responsibilities.
 
 ---
 
@@ -48,12 +45,6 @@ chmod +x run.sh
 # args: <config> <num_trials> <plots_dir> <results_csv>
 ./run.sh experiments/configs/gmm_em.yaml 50 experiments/plots experiments/results/gmm_em_results.csv
 ```
-
-Environment knobs for HPC machines:
-
-- `RESULTS_PATH` (4th arg) lets you stream runs into a single CSV.
-- `OMP_NUM_THREADS` / `MKL_NUM_THREADS` default to `1` inside `run.sh` to avoid MKL/KMeans issues on shared nodes—you can override before invoking the script.
-- Set `SKIP_PLOTS=1 ./run.sh ...` if you only want the CSV (plots can be heavy on headless clusters).
 
 ### Windows PowerShell
 
@@ -146,27 +137,6 @@ Included predictors / objects in this repo:
 | **EM-R / EM-RX** | Responsibility pipelines feeding EM-PCP: EM-R fits the GMM on $R$ alone (features $\tau_R(r)$), while EM-RX fits on $[R; X]$ ($\tau_{RX}(x,r)$), toggled by `em_fit.use_X_in_em`. |
 | **MembershipPCPModel** | Consumes membership weights $\pi$ and outputs quantiles $q(\pi)$ by multinomial-precision weighting, enabling set construction $C(\pi) = \{ y : |y - \mu_{\text{joint}}| \le q(\pi) \}$. |
 
-Here $\hat{z}$ always refers to the doc-EM responsibilities returned by `responsibilities_with_y` / `responsibilities_from_r`.
-
-Notes on "oracle" baselines:
-
-- **Oracle (true μ, Z)** removes *regression estimation error* entirely by using the known simulator parameters and the revealed latent label.
-- **PCP (X,Z)** is an "oracle feature" baseline (it is still learning a RandomForest center model and PCP's internal calibration models), but it removes *latent-label uncertainty* by supplying the true one-hot $Z$ as a covariate.
-
-**Doc-style updates:**
-
-- All PCP baselines now ride the same RandomForest regression backbone, but they differ only in which covariates they expose to PCP (oracle `Z`, soft `ẑ`, or auxiliary `R`).
-- EM diagnostics and EM-PCP continue to draw memberships from
-	`src/doc_em.py`, ensuring consistency with the simulator assumptions.
-
-Run a subset of baselines by pairing CLI overrides with YAML edits. Example: EM-PCP only.
-
-```bash
-python main.py --config experiments/configs/gmm_em.yaml --results experiments/results/em_pcp_only.csv
-```
-
-With `pcp.base.enabled=false`, `pcp.em.enabled=true` inside the YAML.
-
 ---
 
 ## 3. Visualize metrics
@@ -187,5 +157,3 @@ The plotter automatically discovers all columns in the CSV. When PCP-base or EM-
 | `mean_max_tau_vs_grid.png` | Average sharpness of EM responsibilities. High values mean clusters are well separated. |
 | `z_feature_mse_vs_grid.png` | MSE between the EM-soft features and the oracle latent means. Lower values indicate better feature recovery. |
 | `em_iterations_hist.png` | Histogram of EM iteration counts, useful for spotting difficult configurations. |
-
-Set `SKIP_PLOTS=1` during the run and execute the plotting command separately once results are ready.
