@@ -1,5 +1,5 @@
 > [!NOTE]
-> If you find this project interesting, you might also want to check out [MDCP](https://github.com/AragornBFRer/MDCP)!
+> It's an ongoing project. A polished version will be released later. If you find this project interesting, you might also want to check out [MDCP](https://github.com/AragornBFRer/MDCP)!
 
 ### Config
 
@@ -189,17 +189,3 @@ The plotter automatically discovers all columns in the CSV. When PCP-base or EM-
 | `em_iterations_hist.png` | Histogram of EM iteration counts, useful for spotting difficult configurations. |
 
 Set `SKIP_PLOTS=1` during the run and execute the plotting command separately once results are ready.
-
-### Combined PCP coverage/length PDF
-
-To merge the PCP coverage and length curves into a single PDF (coverage on the left, interval length on the right), run:
-
-```bash
-python plot_combined.py --config experiments/configs/gmm_em.yaml --results experiments/results/case3/results.csv --out experiments/plots/case3 --filename coverage_length_case3.pdf
-```
-
-Key options:
-
-- `--results`: points to any CSV produced by `main.py`/`multi_main.py`.
-- `--out` and `--filename`: control the destination folder and PDF name (must end in `.pdf`).
-- `--use-x-in-em`: choose which EM responsibility fit to display: `false` (default, EM-R), `true` (EM-RX), or `auto` (plot everything that exists in the CSV).
